@@ -1,0 +1,135 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: gateway
+  
+  data:
+    redis:
+      host: localhost
+      port: 6379
+      password: 
+      database: 0
+      timeout: 3000ms
+      lettuce:
+        pool:
+          max-active: 8
+          max-idle: 8
+          min-idle: 0
+          max-wait: -1ms
+
+  cloud:
+    gateway:
+      # 全局默认过滤器
+      default-filters:
+        - PreserveHostHeader
+      routes:
+        - id: probe-ios-upload
+          uri: lb://uploadlog-service
+          predicates:
+            - Path=/api/probe/ios/upload
+          filters:
+            - StripPrefix=0
+            - RemoveRequestHeader=X-Forwarded-Host
+        - id: probe-android-upload
+          uri: lb://uploadlog-service
+          predicates:
+            - Path=/api/probe/android/upload
+          filters:
+            - StripPrefix=0
+            - RemoveRequestHeader=X-Forwarded-Host
+        - id: probe-h5-upload
+          uri: lb://uploadlog-service
+          predicates:
+            - Path=/api/probe/h5/upload
+          filters:
+            - StripPrefix=0
+            - RemoveRequestHeader=X-Forwarded-Host
+
+probe:
+  enabled: true
+  token-enabled: true
+  dns-config-enabled: true
+  upload-enabled: true
+  h5-upload-enabled: true
+  
+  # AES密钥 - 生产环境请修改并妥善保管
+  aes-key: your-aes-key-16ch
+  
+  # HMAC密钥 - 生产环境请修改并妥善保管
+  hmac-secret: your-hmac-secret-key
+  
+  # Token配置
+  token-ttl-minutes: 30
+  token-max-requests-per-window: 100
+  token-request-window-minutes: 5
+  
+  # 时间戳有效期(分钟)
+  timestamp-valid-minutes: 5
+  
+  # IP限流配置: 每个IP每3分钟最多100次
+  ip-rate-limit-count: 100
+  ip-rate-limit-window-seconds: 180
+  
+  # Nonce缓存配置
+  nonce-cache-size: 100000
+  nonce-cache-expire-minutes: 10
+  
+  # 探测域名分类配置 (支持动态刷新)
+  domain-categories:
+    api:
+      name: "API服务"
+      description: "核心API接口服务器"
+      domains:
+        - api.example.com
+        - api-backup.example.com
+    cdn:
+      name: "CDN服务"
+      description: "静态资源CDN节点"
+      domains:
+        - cdn1.example.com
+        - cdn2.example.com
+        - cdn3.example.com
+    static:
+      name: "静态资源"
+      description: "静态文件服务器"
+      domains:
+        - static.example.com
+        - img.example.com
+    thirdparty:
+      name: "第三方服务"
+      description: "第三方依赖服务"
+      domains:
+        - payment.thirdparty.com
+        - push.thirdparty.com
+  
+  # DNS服务器配置 (支持动态刷新)
+  probe-dns-servers:
+    - 8.8.8.8
+    - 114.114.114.114
+    - 223.5.5.5
+  
+  # 路径配置
+  paths:
+    ios-token-path: /api/probe/ios/token
+    android-token-path: /api/probe/android/token
+    ios-dns-config-path: /api/probe/ios/dns-config
+    android-dns-config-path: /api/probe/android/dns-config
+    ios-upload-path: /api/probe/ios/upload
+    android-upload-path: /api/probe/android/upload
+    h5-upload-path: /api/probe/h5/upload
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: refresh,health,info
+  endpoint:
+    refresh:
+      enabled: true
+
+logging:
+  level:
+    com.sports.gateway: DEBUG
+    org.springframework.cloud.gateway: DEBUG
