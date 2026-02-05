@@ -1,6 +1,6 @@
 package com.sports.gateway.probe.service;
 
-import com.alibaba.fastjson.JSON;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sports.gateway.config.properties.ProbeProperties;
 import com.sports.gateway.probe.dto.ProbeTokenInfo;
 import org.junit.jupiter.api.BeforeEach;
@@ -32,6 +32,7 @@ class ProbeTokenServiceTest {
 
     private ProbeProperties probeProperties;
     private ProbeTokenService tokenService;
+    private ObjectMapper objectMapper;
 
     @BeforeEach
     void setUp() {
@@ -39,8 +40,9 @@ class ProbeTokenServiceTest {
         probeProperties.setTokenTtlMinutes(30);
         probeProperties.setTokenMaxRequestsPerWindow(100);
         probeProperties.setTokenRequestWindowMinutes(5);
+        objectMapper = new ObjectMapper();
         
-        tokenService = new ProbeTokenService(redisTemplate, probeProperties);
+        tokenService = new ProbeTokenService(redisTemplate, probeProperties, objectMapper);
     }
 
     @Test
@@ -66,7 +68,7 @@ class ProbeTokenServiceTest {
 
     @Test
     @DisplayName("验证Token - 成功")
-    void validateToken_success() {
+    void validateToken_success() throws Exception {
         ProbeTokenInfo tokenInfo = new ProbeTokenInfo();
         tokenInfo.setToken("test-token");
         tokenInfo.setPlatform("ios");
@@ -76,7 +78,7 @@ class ProbeTokenServiceTest {
         tokenInfo.setCreatedAt(System.currentTimeMillis());
 
         when(redisTemplate.opsForValue()).thenReturn(valueOps);
-        when(valueOps.get(anyString())).thenReturn(JSON.toJSONString(tokenInfo));
+        when(valueOps.get(anyString())).thenReturn(objectMapper.writeValueAsString(tokenInfo));
         when(redisTemplate.execute(any(RedisScript.class), anyList(), any(), any()))
                 .thenReturn(1L);
 
@@ -98,7 +100,7 @@ class ProbeTokenServiceTest {
 
     @Test
     @DisplayName("验证Token - IP不匹配")
-    void validateToken_ipMismatch() {
+    void validateToken_ipMismatch() throws Exception {
         ProbeTokenInfo tokenInfo = new ProbeTokenInfo();
         tokenInfo.setToken("test-token");
         tokenInfo.setPlatform("ios");
@@ -108,7 +110,7 @@ class ProbeTokenServiceTest {
         tokenInfo.setCreatedAt(System.currentTimeMillis());
 
         when(redisTemplate.opsForValue()).thenReturn(valueOps);
-        when(valueOps.get(anyString())).thenReturn(JSON.toJSONString(tokenInfo));
+        when(valueOps.get(anyString())).thenReturn(objectMapper.writeValueAsString(tokenInfo));
 
         boolean result = tokenService.validateTokenSync("test-token", "10.0.0.1", "app001");
         
@@ -117,7 +119,7 @@ class ProbeTokenServiceTest {
 
     @Test
     @DisplayName("验证Token - 超过限流")
-    void validateToken_rateLimited() {
+    void validateToken_rateLimited() throws Exception {
         ProbeTokenInfo tokenInfo = new ProbeTokenInfo();
         tokenInfo.setToken("test-token");
         tokenInfo.setPlatform("ios");
@@ -127,7 +129,7 @@ class ProbeTokenServiceTest {
         tokenInfo.setCreatedAt(System.currentTimeMillis());
 
         when(redisTemplate.opsForValue()).thenReturn(valueOps);
-        when(valueOps.get(anyString())).thenReturn(JSON.toJSONString(tokenInfo));
+        when(valueOps.get(anyString())).thenReturn(objectMapper.writeValueAsString(tokenInfo));
         when(redisTemplate.execute(any(RedisScript.class), anyList(), any(), any()))
                 .thenReturn(0L);
 

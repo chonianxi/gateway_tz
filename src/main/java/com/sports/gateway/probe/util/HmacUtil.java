@@ -2,16 +2,26 @@ package com.sports.gateway.probe.util;
 
 import lombok.extern.slf4j.Slf4j;
 
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
+
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
+import java.util.concurrent.TimeUnit;
 
 @Slf4j
 public class HmacUtil {
 
     private static final String HMAC_SHA256 = "HmacSHA256";
     private static final char[] HEX_CHARS = "0123456789abcdef".toCharArray();
+    
+    // 缓存SecretKeySpec，避免每次创建 (CPU优化)
+    private static final Cache<String, SecretKeySpec> SECRET_KEY_CACHE = Caffeine.newBuilder()
+            .maximumSize(100)
+            .expireAfterAccess(1, TimeUnit.HOURS)
+            .build();
     
     // ThreadLocal复用Mac实例
     private static final ThreadLocal<Mac> MAC_INSTANCE = ThreadLocal.withInitial(() -> {
@@ -36,8 +46,7 @@ public class HmacUtil {
             String input = ts + nonce + bodyHash;
             
             Mac mac = MAC_INSTANCE.get();
-            SecretKeySpec secretKeySpec = new SecretKeySpec(
-                    secret.getBytes(StandardCharsets.UTF_8), HMAC_SHA256);
+            SecretKeySpec secretKeySpec = getSecretKeySpec(secret);
             mac.init(secretKeySpec);
             
             byte[] hmacBytes = mac.doFinal(input.getBytes(StandardCharsets.UTF_8));
@@ -72,6 +81,12 @@ public class HmacUtil {
         }
     }
 
+    // 缓存SecretKeySpec，避免重复创建 (CPU优化)
+    private static SecretKeySpec getSecretKeySpec(String secret) {
+        return SECRET_KEY_CACHE.get(secret, k -> 
+                new SecretKeySpec(k.getBytes(StandardCharsets.UTF_8), HMAC_SHA256));
+    }
+    
     // 优化: 使用char数组替代String.format，性能提升约10倍
     private static String bytesToHex(byte[] bytes) {
         char[] hexChars = new char[bytes.length * 2];

@@ -1,6 +1,6 @@
 package com.sports.gateway.probe;
 
-import com.alibaba.fastjson.JSON;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sports.gateway.probe.dto.TokenRequest;
 import com.sports.gateway.probe.dto.TokenResponse;
 import com.sports.gateway.probe.util.AesUtil;
@@ -27,20 +27,21 @@ class ProbeIntegrationTest {
 
     private static final String AES_KEY = "test-aes-key-123";
     private static final String HMAC_SECRET = "test-hmac-secret";
+    private static final ObjectMapper objectMapper = new ObjectMapper();
     
     private static String savedToken;
 
     @Test
     @Order(1)
     @DisplayName("Step 1: 构造Token请求报文")
-    void step1_buildTokenRequest() {
+    void step1_buildTokenRequest() throws Exception {
         // 1. 构造明文请求
         TokenRequest request = new TokenRequest();
         request.setDeviceId("test-device-" + UUID.randomUUID().toString().substring(0, 8));
         request.setAppVersion("1.0.0");
         request.setTs(System.currentTimeMillis());
 
-        String plainJson = JSON.toJSONString(request);
+        String plainJson = objectMapper.writeValueAsString(request);
         System.out.println("明文请求: " + plainJson);
 
         // 2. AES加密
@@ -53,13 +54,13 @@ class ProbeIntegrationTest {
         response.setToken(UUID.randomUUID().toString().replace("-", ""));
         response.setExpiresIn(1800L);
         
-        String responseJson = JSON.toJSONString(response);
+        String responseJson = objectMapper.writeValueAsString(response);
         String encryptedResponse = AesUtil.encrypt(responseJson, AES_KEY);
         System.out.println("加密后响应: " + encryptedResponse);
 
         // 4. 解密响应
         String decryptedResponse = AesUtil.decrypt(encryptedResponse, AES_KEY);
-        TokenResponse parsedResponse = JSON.parseObject(decryptedResponse, TokenResponse.class);
+        TokenResponse parsedResponse = objectMapper.readValue(decryptedResponse, TokenResponse.class);
         
         assertNotNull(parsedResponse.getToken());
         assertEquals(1800L, parsedResponse.getExpiresIn());

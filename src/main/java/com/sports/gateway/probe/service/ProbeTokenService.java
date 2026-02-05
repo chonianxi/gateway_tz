@@ -1,7 +1,8 @@
 package com.sports.gateway.probe.service;
 
 import cn.hutool.core.util.IdUtil;
-import com.alibaba.fastjson.JSON;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sports.gateway.config.properties.ProbeProperties;
 import com.sports.gateway.probe.dto.ProbeTokenInfo;
 import lombok.extern.slf4j.Slf4j;
@@ -32,12 +33,15 @@ public class ProbeTokenService {
     private final StringRedisTemplate redisTemplate;
     private final RedisScript<Long> incrementScript;
     private final ProbeProperties probeProperties;
+    private final ObjectMapper objectMapper;
 
     public ProbeTokenService(StringRedisTemplate redisTemplate,
-                             ProbeProperties probeProperties) {
+                             ProbeProperties probeProperties,
+                             ObjectMapper objectMapper) {
         this.redisTemplate = redisTemplate;
         this.probeProperties = probeProperties;
         this.incrementScript = RedisScript.of(INCREMENT_SCRIPT, Long.class);
+        this.objectMapper = objectMapper;
     }
 
     public String generateTokenSync(String platform, String deviceId, String clientIp, String appId) {
@@ -53,7 +57,7 @@ public class ProbeTokenService {
             tokenInfo.setAppId(appId);
             tokenInfo.setCreatedAt(System.currentTimeMillis());
 
-            redisTemplate.opsForValue().set(key, JSON.toJSONString(tokenInfo), 
+            redisTemplate.opsForValue().set(key, objectMapper.writeValueAsString(tokenInfo), 
                     probeProperties.getTokenTtlMinutes(), TimeUnit.MINUTES);
             
             return token;
@@ -77,7 +81,7 @@ public class ProbeTokenService {
                 return false;
             }
 
-            ProbeTokenInfo tokenInfo = JSON.parseObject(tokenInfoJson, ProbeTokenInfo.class);
+            ProbeTokenInfo tokenInfo = objectMapper.readValue(tokenInfoJson, ProbeTokenInfo.class);
             if (tokenInfo == null) {
                 return false;
             }

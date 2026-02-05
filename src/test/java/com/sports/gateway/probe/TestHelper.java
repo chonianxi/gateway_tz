@@ -1,6 +1,6 @@
 package com.sports.gateway.probe;
 
-import com.alibaba.fastjson.JSON;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sports.gateway.probe.dto.TokenRequest;
 import com.sports.gateway.probe.util.AesUtil;
 import com.sports.gateway.probe.util.HmacUtil;
@@ -17,6 +17,7 @@ public class TestHelper {
 
     private static final String AES_KEY = "test-aes-key-123";
     private static final String HMAC_SECRET = "test-hmac-secret";
+    private static final ObjectMapper objectMapper = new ObjectMapper();
 
     public static void main(String[] args) {
         System.out.println("=== 探针API测试数据生成器 ===\n");
@@ -34,12 +35,13 @@ public class TestHelper {
     public static void generateTokenRequest() {
         System.out.println("=== Token请求 ===");
         
-        TokenRequest request = new TokenRequest();
-        request.setDeviceId("device-" + UUID.randomUUID().toString().substring(0, 8));
-        request.setAppVersion("1.0.0");
-        request.setTs(System.currentTimeMillis());
+        try {
+            TokenRequest request = new TokenRequest();
+            request.setDeviceId("device-" + UUID.randomUUID().toString().substring(0, 8));
+            request.setAppVersion("1.0.0");
+            request.setTs(System.currentTimeMillis());
 
-        String plainJson = JSON.toJSONString(request);
+            String plainJson = objectMapper.writeValueAsString(request);
         System.out.println("明文: " + plainJson);
 
         String encrypted = AesUtil.encrypt(plainJson, AES_KEY);
@@ -50,6 +52,9 @@ public class TestHelper {
         System.out.printf("  -H 'Content-Type: application/json' \\%n");
         System.out.printf("  -d '%s'%n", encrypted);
         System.out.println();
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
     }
 
     /**

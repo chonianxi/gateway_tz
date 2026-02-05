@@ -1,6 +1,7 @@
 package com.sports.gateway.probe.service;
 
-import com.alibaba.fastjson.JSON;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sports.gateway.config.properties.ProbeProperties;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.kafka.core.KafkaTemplate;
@@ -16,11 +17,14 @@ public class ProbeKafkaService {
 
     private final KafkaTemplate<String, String> kafkaTemplate;
     private final ProbeProperties probeProperties;
+    private final ObjectMapper objectMapper;
 
     public ProbeKafkaService(KafkaTemplate<String, String> kafkaTemplate,
-                             ProbeProperties probeProperties) {
+                             ProbeProperties probeProperties,
+                             ObjectMapper objectMapper) {
         this.kafkaTemplate = kafkaTemplate;
         this.probeProperties = probeProperties;
+        this.objectMapper = objectMapper;
     }
 
     public void sendProbeData(String appId, String platform, String clientIp, Map<String, Object> probeData) {
@@ -32,7 +36,7 @@ public class ProbeKafkaService {
             message.setTimestamp(System.currentTimeMillis());
             message.setData(probeData);
 
-            String jsonMessage = JSON.toJSONString(message);
+            String jsonMessage = objectMapper.writeValueAsString(message);
             String topic = probeProperties.getKafkaTopic();
 
             CompletableFuture<SendResult<String, String>> future = kafkaTemplate.send(topic, appId, jsonMessage);
@@ -59,7 +63,7 @@ public class ProbeKafkaService {
             message.setTimestamp(System.currentTimeMillis());
             message.setData(probeData);
 
-            String jsonMessage = JSON.toJSONString(message);
+            String jsonMessage = objectMapper.writeValueAsString(message);
             String topic = probeProperties.getKafkaTopic();
 
             SendResult<String, String> result = kafkaTemplate.send(topic, appId, jsonMessage).get();

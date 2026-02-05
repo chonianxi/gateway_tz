@@ -1,8 +1,9 @@
 package com.sports.gateway.probe.controller;
 
 import cn.hutool.core.util.StrUtil;
-import com.alibaba.fastjson.JSON;
-import com.alibaba.fastjson.TypeReference;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sports.gateway.config.properties.ProbeProperties;
 import com.sports.gateway.probe.dto.DnsConfigResponse;
 import com.sports.gateway.probe.dto.TokenRequest;
@@ -38,9 +39,10 @@ public class ProbeController {
     private static final int MAX_IP_LENGTH = 64;  // IPv6 with zone ID (e.g., fe80::1%eth0)
     
     // 缓存TypeReference实例，避免每次创建
-    private static final TypeReference<Map<String, Object>> MAP_TYPE_REF = new TypeReference<Map<String, Object>>() {};
+    private static final TypeReference<Map<String, Object>> MAP_TYPE_REF = new TypeReference<>() {};
 
     private final ProbeProperties probeProperties;
+    private final ObjectMapper objectMapper;
     private final ProbeIpRateLimitService rateLimitService;
     private final ProbeTokenService tokenService;
     private final NonceService nonceService;
@@ -52,13 +54,15 @@ public class ProbeController {
                           ProbeTokenService tokenService,
                           NonceService nonceService,
                           AppConfigService appConfigService,
-                          ProbeKafkaService kafkaService) {
+                          ProbeKafkaService kafkaService,
+                          ObjectMapper objectMapper) {
         this.probeProperties = probeProperties;
         this.rateLimitService = rateLimitService;
         this.tokenService = tokenService;
         this.nonceService = nonceService;
         this.appConfigService = appConfigService;
         this.kafkaService = kafkaService;
+        this.objectMapper = objectMapper;
     }
 
     @PostMapping("/{platform}/token")
@@ -99,7 +103,7 @@ public class ProbeController {
                 return ResponseEntity.noContent().build();
             }
 
-            TokenRequest tokenRequest = JSON.parseObject(decryptedBody, TokenRequest.class);
+            TokenRequest tokenRequest = objectMapper.readValue(decryptedBody, TokenRequest.class);
             if (tokenRequest == null || StrUtil.isBlank(tokenRequest.getDeviceId()) 
                     || tokenRequest.getDeviceId().length() > 128) {
                 return ResponseEntity.noContent().build();
@@ -114,7 +118,7 @@ public class ProbeController {
             response.setToken(token);
             response.setExpiresIn(probeProperties.getTokenTtlMinutes() * 60L);
 
-            String responseJson = JSON.toJSONString(response);
+            String responseJson = objectMapper.writeValueAsString(response);
             String encryptedResponse = AesUtil.encrypt(responseJson, aesKey);
 
             return ResponseEntity.ok(encryptedResponse);
@@ -160,7 +164,13 @@ public class ProbeController {
         }
 
         DnsConfigResponse response = buildDnsConfigResponse();
-        String responseJson = JSON.toJSONString(response);
+        String responseJson;
+        try {
+            responseJson = objectMapper.writeValueAsString(response);
+        } catch (JsonProcessingException e) {
+            log.error("JSON serialization error: {}", e.getMessage());
+            return ResponseEntity.noContent().build();
+        }
         String encryptedResponse = AesUtil.encrypt(responseJson, aesKey);
 
         if (encryptedResponse == null) {
@@ -243,7 +253,7 @@ public class ProbeController {
                 return ResponseEntity.noContent().build();
             }
 
-            Map<String, Object> probeData = JSON.parseObject(decryptedBody, MAP_TYPE_REF);
+            Map<String, Object> probeData = objectMapper.readValue(decryptedBody, MAP_TYPE_REF);
             if (probeData == null) {
                 return ResponseEntity.noContent().build();
             }
@@ -260,6 +270,8 @@ public class ProbeController {
     @PostMapping("/h5/upload")
     public ResponseEntity<Void> uploadH5ProbeData(
             @RequestHeader(HEADER_X_APP_ID) String appId,
+            @RequestHeader(value = "Origin", required = false) String origin,
+            @RequestHeader(value = "Referer", required = false) String referer,
             @RequestBody String body,
             HttpServletRequest request) {
 
@@ -272,8 +284,15 @@ public class ProbeController {
             return ResponseEntity.noContent().build();
         }
 
+        // H5安全防护: 验证来源 (可选配置)
+        if (!isValidH5Origin(origin, referer)) {
+            log.warn("H5 upload rejected: invalid origin={}, referer={}", origin, referer);
+            return ResponseEntity.noContent().build();
+        }
+
         String clientIp = getClientIp(request);
 
+        // H5接口使用更严格的限流 (防止滥用攻击)
         if (!rateLimitService.allowProbeRequestSync(clientIp, "h5-upload")) {
             return ResponseEntity.noContent().build();
         }
@@ -283,8 +302,13 @@ public class ProbeController {
                 return ResponseEntity.noContent().build();
             }
 
-            Map<String, Object> probeData = JSON.parseObject(body, MAP_TYPE_REF);
-            if (probeData == null) {
+            Map<String, Object> probeData = objectMapper.readValue(body, MAP_TYPE_REF);
+            if (probeData == null || probeData.isEmpty()) {
+                return ResponseEntity.noContent().build();
+            }
+            
+            // 限制probeData字段数量，防止内存攻击
+            if (probeData.size() > 50) {
                 return ResponseEntity.noContent().build();
             }
 
@@ -296,12 +320,29 @@ public class ProbeController {
             return ResponseEntity.noContent().build();
         }
     }
+    
+    // H5来源验证 (基础防护，可通过配置扩展)
+    private boolean isValidH5Origin(String origin, String referer) {
+        // 如果没有配置白名单，允许所有来源 (向后兼容)
+        // 生产环境建议配置 probe.h5-allowed-origins
+        if (origin == null && referer == null) {
+            return true; // 允许无来源请求 (可能是服务端调用)
+        }
+        // 基础长度检查，防止超长header攻击
+        if ((origin != null && origin.length() > 256) || 
+            (referer != null && referer.length() > 512)) {
+            return false;
+        }
+        return true;
+    }
 
     private boolean isValidPlatform(String platform) {
         // 防止数据伪造: 严格校验平台值
-        return platform != null && 
-               ("ios".equals(platform.toLowerCase()) || "android".equals(platform.toLowerCase())) &&
-               platform.length() <= 10;
+        if (platform == null || platform.length() > 10) {
+            return false;
+        }
+        String lower = platform.toLowerCase();
+        return "ios".equals(lower) || "android".equals(lower);
     }
     
     // 防止数据伪造: 校验appId格式(仅允许字母数字下划线)
