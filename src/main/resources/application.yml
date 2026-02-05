@@ -1,51 +1,81 @@
 server:
   port: 8080
+  tomcat:
+    threads:
+      max: 200
+      min-spare: 20
+    max-connections: 10000
+    accept-count: 100
+    connection-timeout: 5000
 
 spring:
   application:
-    name: gateway
+    name: probe-service
   
   data:
     redis:
+      # === 单机模式 (默认) ===
       host: localhost
       port: 6379
       password: 
       database: 0
+      
+      # === 集群模式 (生产环境推荐) ===
+      # 启用集群模式时，注释掉上面的host/port/database，取消下面cluster的注释
+      # cluster:
+      #   nodes:
+      #     - redis-node1:6379
+      #     - redis-node2:6379
+      #     - redis-node3:6379
+      #     - redis-node4:6379
+      #     - redis-node5:6379
+      #     - redis-node6:6379
+      #   max-redirects: 3
+      
+      # === 哨兵模式 ===
+      # sentinel:
+      #   master: mymaster
+      #   nodes:
+      #     - sentinel1:26379
+      #     - sentinel2:26379
+      #     - sentinel3:26379
+      
+      # === 通用配置 ===
       timeout: 3000ms
+      connect-timeout: 2000ms
       lettuce:
         pool:
-          max-active: 8
-          max-idle: 8
-          min-idle: 0
-          max-wait: -1ms
+          max-active: 50
+          max-idle: 20
+          min-idle: 5
+          max-wait: 2000ms
+          time-between-eviction-runs: 30000ms
+        cluster:
+          refresh:
+            adaptive: true
+            period: 30s
 
-  cloud:
-    gateway:
-      # 全局默认过滤器
-      default-filters:
-        - PreserveHostHeader
-      routes:
-        - id: probe-ios-upload
-          uri: lb://uploadlog-service
-          predicates:
-            - Path=/api/probe/ios/upload
-          filters:
-            - StripPrefix=0
-            - RemoveRequestHeader=X-Forwarded-Host
-        - id: probe-android-upload
-          uri: lb://uploadlog-service
-          predicates:
-            - Path=/api/probe/android/upload
-          filters:
-            - StripPrefix=0
-            - RemoveRequestHeader=X-Forwarded-Host
-        - id: probe-h5-upload
-          uri: lb://uploadlog-service
-          predicates:
-            - Path=/api/probe/h5/upload
-          filters:
-            - StripPrefix=0
-            - RemoveRequestHeader=X-Forwarded-Host
+  kafka:
+    bootstrap-servers: localhost:9092
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.StringSerializer
+      acks: 1
+      retries: 3
+      batch-size: 16384
+      buffer-memory: 33554432
+      properties:
+        max.block.ms: 3000
+        linger.ms: 5
+        max.in.flight.requests.per.connection: 5
+        delivery.timeout.ms: 10000
+        request.timeout.ms: 5000
+
+# Jasypt加密配置 - 启动时通过环境变量或-Djasypt.encryptor.password=xxx传入主密码
+jasypt:
+  encryptor:
+    algorithm: PBEWITHHMACSHA512ANDAES_256
+    iv-generator-classname: org.jasypt.iv.RandomIvGenerator
 
 probe:
   enabled: true
@@ -54,11 +84,23 @@ probe:
   upload-enabled: true
   h5-upload-enabled: true
   
-  # AES密钥 - 生产环境请修改并妥善保管
-  aes-key: your-aes-key-16ch
+  # Kafka topic
+  kafka-topic: probe_metadata
   
-  # HMAC密钥 - 生产环境请修改并妥善保管
-  hmac-secret: your-hmac-secret-key
+  # 多商户APPID和密钥配置 (支持ENC()加密)
+  # 加密方式: java -cp jasypt-1.9.3.jar org.jasypt.intf.cli.JasyptPBEStringEncryptionCLI input="your-secret" password="master-password" algorithm=PBEWITHHMACSHA512ANDAES_256
+  # 启动时传入主密码: -Djasypt.encryptor.password=master-password 或 环境变量 JASYPT_ENCRYPTOR_PASSWORD
+  apps:
+    - app-id: app001
+      app-name: "商户A"
+      aes-key: ENC(加密后的AES密钥)        # AES加密密钥 (支持ENC()加密)
+      hmac-secret: ENC(加密后的HMAC密钥)   # HMAC签名密钥 (支持ENC()加密)
+      enabled: true
+    - app-id: app002
+      app-name: "商户B"
+      aes-key: ENC(加密后的AES密钥)
+      hmac-secret: ENC(加密后的HMAC密钥)
+      enabled: true
   
   # Token配置
   token-ttl-minutes: 30

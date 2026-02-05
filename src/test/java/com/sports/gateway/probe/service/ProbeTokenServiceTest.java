@@ -9,19 +9,15 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
-import org.springframework.data.redis.core.ReactiveRedisTemplate;
-import org.springframework.data.redis.core.ReactiveValueOperations;
+import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.core.ValueOperations;
 import org.springframework.data.redis.core.script.RedisScript;
-import reactor.core.publisher.Flux;
-import reactor.core.publisher.Mono;
-import reactor.test.StepVerifier;
 
-import java.time.Duration;
 import java.util.List;
+import java.util.concurrent.TimeUnit;
 
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyList;
-import static org.mockito.ArgumentMatchers.anyString;
+import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -29,10 +25,10 @@ import static org.mockito.Mockito.when;
 class ProbeTokenServiceTest {
 
     @Mock
-    private ReactiveRedisTemplate<String, String> redisTemplate;
+    private StringRedisTemplate redisTemplate;
     
     @Mock
-    private ReactiveValueOperations<String, String> valueOps;
+    private ValueOperations<String, String> valueOps;
 
     private ProbeProperties probeProperties;
     private ProbeTokenService tokenService;
@@ -51,23 +47,21 @@ class ProbeTokenServiceTest {
     @DisplayName("生成Token - 成功")
     void generateToken_success() {
         when(redisTemplate.opsForValue()).thenReturn(valueOps);
-        when(valueOps.set(anyString(), anyString(), any(Duration.class)))
-                .thenReturn(Mono.just(true));
 
-        StepVerifier.create(tokenService.generateToken("ios", "device-001", "192.168.1.1"))
-                .expectNextMatches(token -> token != null && token.length() == 32)
-                .verifyComplete();
+        String token = tokenService.generateTokenSync("ios", "device-001", "192.168.1.1", "app001");
+        
+        assertNotNull(token);
+        assertEquals(32, token.length());
     }
 
     @Test
-    @DisplayName("生成Token - Redis异常返回空")
-    void generateToken_redisError_returnsEmpty() {
-        when(redisTemplate.opsForValue()).thenReturn(valueOps);
-        when(valueOps.set(anyString(), anyString(), any(Duration.class)))
-                .thenReturn(Mono.error(new RuntimeException("Redis error")));
+    @DisplayName("生成Token - Redis异常返回null")
+    void generateToken_redisError_returnsNull() {
+        when(redisTemplate.opsForValue()).thenThrow(new RuntimeException("Redis error"));
 
-        StepVerifier.create(tokenService.generateToken("ios", "device-001", "192.168.1.1"))
-                .verifyComplete();
+        String token = tokenService.generateTokenSync("ios", "device-001", "192.168.1.1", "app001");
+        
+        assertNull(token);
     }
 
     @Test
@@ -78,26 +72,28 @@ class ProbeTokenServiceTest {
         tokenInfo.setPlatform("ios");
         tokenInfo.setDeviceId("device-001");
         tokenInfo.setClientIp("192.168.1.1");
+        tokenInfo.setAppId("app001");
         tokenInfo.setCreatedAt(System.currentTimeMillis());
 
         when(redisTemplate.opsForValue()).thenReturn(valueOps);
-        when(valueOps.get(anyString())).thenReturn(Mono.just(JSON.toJSONString(tokenInfo)));
-        when(redisTemplate.execute(any(RedisScript.class), anyList(), anyList()))
-                .thenReturn(Flux.just(1L));
+        when(valueOps.get(anyString())).thenReturn(JSON.toJSONString(tokenInfo));
+        when(redisTemplate.execute(any(RedisScript.class), anyList(), any(), any()))
+                .thenReturn(1L);
 
-        StepVerifier.create(tokenService.validateToken("test-token", "192.168.1.1"))
-                .expectNextMatches(info -> info.getToken().equals("test-token"))
-                .verifyComplete();
+        boolean result = tokenService.validateTokenSync("test-token", "192.168.1.1", "app001");
+        
+        assertTrue(result);
     }
 
     @Test
     @DisplayName("验证Token - Token不存在")
     void validateToken_notFound() {
         when(redisTemplate.opsForValue()).thenReturn(valueOps);
-        when(valueOps.get(anyString())).thenReturn(Mono.empty());
+        when(valueOps.get(anyString())).thenReturn(null);
 
-        StepVerifier.create(tokenService.validateToken("non-existent-token"))
-                .verifyComplete();
+        boolean result = tokenService.validateTokenSync("non-existent-token", "192.168.1.1", "app001");
+        
+        assertFalse(result);
     }
 
     @Test
@@ -108,13 +104,15 @@ class ProbeTokenServiceTest {
         tokenInfo.setPlatform("ios");
         tokenInfo.setDeviceId("device-001");
         tokenInfo.setClientIp("192.168.1.1");
+        tokenInfo.setAppId("app001");
         tokenInfo.setCreatedAt(System.currentTimeMillis());
 
         when(redisTemplate.opsForValue()).thenReturn(valueOps);
-        when(valueOps.get(anyString())).thenReturn(Mono.just(JSON.toJSONString(tokenInfo)));
+        when(valueOps.get(anyString())).thenReturn(JSON.toJSONString(tokenInfo));
 
-        StepVerifier.create(tokenService.validateToken("test-token", "10.0.0.1"))
-                .verifyComplete();
+        boolean result = tokenService.validateTokenSync("test-token", "10.0.0.1", "app001");
+        
+        assertFalse(result);
     }
 
     @Test
@@ -125,22 +123,25 @@ class ProbeTokenServiceTest {
         tokenInfo.setPlatform("ios");
         tokenInfo.setDeviceId("device-001");
         tokenInfo.setClientIp("192.168.1.1");
+        tokenInfo.setAppId("app001");
         tokenInfo.setCreatedAt(System.currentTimeMillis());
 
         when(redisTemplate.opsForValue()).thenReturn(valueOps);
-        when(valueOps.get(anyString())).thenReturn(Mono.just(JSON.toJSONString(tokenInfo)));
-        when(redisTemplate.execute(any(RedisScript.class), anyList(), anyList()))
-                .thenReturn(Flux.just(0L));
+        when(valueOps.get(anyString())).thenReturn(JSON.toJSONString(tokenInfo));
+        when(redisTemplate.execute(any(RedisScript.class), anyList(), any(), any()))
+                .thenReturn(0L);
 
-        StepVerifier.create(tokenService.validateToken("test-token", "192.168.1.1"))
-                .verifyComplete();
+        boolean result = tokenService.validateTokenSync("test-token", "192.168.1.1", "app001");
+        
+        assertFalse(result);
     }
 
     @Test
     @DisplayName("验证Token - Token为null")
     void validateToken_null() {
-        StepVerifier.create(tokenService.validateToken(null))
-                .verifyComplete();
+        boolean result = tokenService.validateTokenSync(null, "192.168.1.1", "app001");
+        
+        assertFalse(result);
     }
 
     @Test
@@ -148,7 +149,8 @@ class ProbeTokenServiceTest {
     void validateToken_tooLong() {
         String longToken = "a".repeat(100);
         
-        StepVerifier.create(tokenService.validateToken(longToken))
-                .verifyComplete();
+        boolean result = tokenService.validateTokenSync(longToken, "192.168.1.1", "app001");
+        
+        assertFalse(result);
     }
 }

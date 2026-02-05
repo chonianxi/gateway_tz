@@ -8,5 +8,6 @@ public class ProbeTokenInfo {
     private String platform;
     private String deviceId;
     private String clientIp;
+    private String appId;
     private long createdAt;
 }

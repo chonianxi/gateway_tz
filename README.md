@@ -1,28 +1,36 @@
-# Gateway 网络探针服务
+# Probe Service 网络探针服务
 
 ## 概述
 
-本模块为APP端提供网络探针数据上报功能，用于监控APP到服务端的网络质量、DNS解析情况等。
+本服务为APP端提供网络探针数据上报功能，用于监控APP到服务端的网络质量、DNS解析情况等。接收到的探针数据会解密后发送到Kafka供下游消费。
+
+## 架构特性
+
+- **多商户支持**: 每个商户拥有独立的APPID、AES密钥和HMAC密钥
+- **配置加密**: 支持Jasypt `ENC()` 加密敏感配置（AES密钥、HMAC密钥）
+- **Kafka集成**: 解密后的探针数据发送到 `probe_metadata` topic
+- **Spring Boot**: 标准Spring Boot Web项目，非Gateway
 
 ## 功能特性
 
 - **Token管理**: 30分钟有效期，同一Token 5分钟内最多100次请求
 - **防重放攻击**: Nonce + 时间戳双重校验
 - **IP限流**: 每IP每3分钟最多100次（可配置）
-- **AES加密**: 请求/响应报文AES-256-CBC加密
-- **HMAC签名**: 防篡改校验
+- **AES加密**: 请求/响应报文AES-256-CBC加密（每商户独立密钥）
+- **HMAC签名**: 防篡改校验（每商户独立密钥）
 - **功能开关**: 支持动态关闭各接口
-- **动态配置**: 配置更新后自动生效，无需重启服务
 - **域名分类**: 支持按用途分类管理探测域名
 
 ## API接口概览
 
-| 接口 | 方法 | URL | 说明 |
-|------|------|-----|------|
-| 获取Token | POST | `/api/probe/{ios\|android}/token` | AES加密 |
-| DNS配置 | GET | `/api/probe/{ios\|android}/dns-config` | 需Token |
-| 上报(APP) | POST | `/api/probe/{ios\|android}/upload` | 完整校验 |
-| 上报(H5) | POST | `/api/probe/h5/upload` | 仅IP限流 |
+| 接口 | 方法 | URL | 请求头 | 说明 |
+|------|------|-----|--------|------|
+| 获取Token | POST | `/api/probe/{ios\|android}/token` | X-App-Id | AES加密 |
+| DNS配置 | POST | `/api/probe/{ios\|android}/dns-config` | X-App-Id, X-Probe-Token | 需Token |
+| 上报(APP) | POST | `/api/probe/{ios\|android}/upload` | X-App-Id, X-Probe-Token, X-Ts, X-Nonce, X-Sign | 完整校验 |
+| 上报(H5) | POST | `/api/probe/h5/upload` | X-App-Id | 仅IP限流 |
+
+**注意**: 所有请求必须携带 `X-App-Id` 请求头，用于识别商户。
 
 ---
 
@@ -40,6 +48,7 @@
 **Headers:**
 ```
 Content-Type: application/json
+X-App-Id: app001
 ```
 
 **Body (AES加密前的明文):**
@@ -93,6 +102,7 @@ IV(16字节) + AES密文 -> Base64编码
 
 **Headers:**
 ```
+X-App-Id: app001
 X-Probe-Token: <从Token接口获取的token>
 ```
 
@@ -168,6 +178,7 @@ X-Probe-Token: <从Token接口获取的token>
 **Headers:**
 ```
 Content-Type: application/json
+X-App-Id: app001
 X-Probe-Token: <从Token接口获取的token>
 X-Ts: 1706598000000
 X-Nonce: <32位随机字符串>
@@ -176,18 +187,19 @@ X-Sign: <HMAC签名>
 
 | Header | 说明 |
 |--------|------|
+| X-App-Id | 商户APPID |
 | X-Probe-Token | 探针Token |
 | X-Ts | 请求时间戳(毫秒)，必须在5分钟内 |
 | X-Nonce | 随机字符串(最长64字符)，防重放 |
-| X-Sign | HMAC-SHA256签名 |
+| X-Sign | HMAC-SHA256签名 (使用商户独立的hmac-secret) |
 
 **HMAC签名计算:**
 ```
 input = X-Ts + X-Nonce + SHA256(RequestBody)
-signature = HMAC-SHA256(input, hmacSecret)
+signature = HMAC-SHA256(input, 商户hmacSecret)
 ```
 
-**Body (AES加密的探针数据，Gateway不解密直接透传):**
+**Body (AES加密的探针数据，服务端解密后发送到Kafka):**
 ```
 AES加密后的Base64字符串，解密后格式示例:
 {
@@ -230,20 +242,25 @@ AES加密后的Base64字符串，解密后格式示例:
 |------|------|------|
 | probeResults[].categoryKey | String | **必填**，域名分类标识，与DNS配置返回的categoryKey对应 |
 
-#### Gateway透传给下游的Header
+#### Kafka消息格式
 
-| Header | 说明 |
-|--------|------|
-| X-Probe-Validated | 固定值 `true`，表示已通过Gateway校验 |
-| X-Probe-Platform | 平台标识：`ios` 或 `android` |
-| X-Probe-Client-IP | 客户端真实IP地址 |
+解密后的探针数据会发送到 `probe_metadata` topic，消息格式：
+```json
+{
+    "appId": "app001",
+    "platform": "ios",
+    "clientIp": "192.168.1.100",
+    "timestamp": 1706598000000,
+    "data": { /* 解密后的原始探针数据 */ }
+}
+```
 
 #### 响应报文
 
 **成功响应:**
-- 由后端 `uploadlog-service` 返回
+- `200 OK` - 数据已接收并发送到Kafka
 
-**失败响应 (Gateway层拦截):**
+**失败响应:**
 - `204 No Content` - 校验失败（时间戳过期/Nonce重复/HMAC错误/Token无效）
 - `410 Gone` - 接口已关闭
 
@@ -262,6 +279,7 @@ H5端探针上报，仅做IP限流和报文大小校验，**无需Token/HMAC/AES
 **Headers:**
 ```
 Content-Type: application/json
+X-App-Id: app001
 ```
 
 **Body (明文JSON，无需加密):**
@@ -288,18 +306,23 @@ Content-Type: application/json
 }
 ```
 
-#### Gateway透传给下游的Header
+#### Kafka消息格式
 
-| Header | 值 |
-|--------|-----|
-| X-Probe-Validated | `true` |
-| X-Probe-Platform | `h5` |
-| X-Probe-Client-IP | 客户端真实IP |
+H5数据同样发送到 `probe_metadata` topic：
+```json
+{
+    "appId": "app001",
+    "platform": "h5",
+    "clientIp": "192.168.1.100",
+    "timestamp": 1706598000000,
+    "data": { /* 原始H5探针数据 */ }
+}
+```
 
 #### 响应报文
 
 **成功响应:**
-- 由后端 `uploadlog-service` 返回
+- `200 OK` - 数据已接收并发送到Kafka
 
 **失败响应:**
 - `204 No Content` - IP限流或报文过大(>64KB)
@@ -363,7 +386,98 @@ Content-Type: application/json
 
 ## 配置说明
 
+### Redis配置
+
+支持三种部署模式：单机、集群、哨兵。
+
+#### 单机模式 (开发环境)
+
 ```yaml
+spring:
+  data:
+    redis:
+      host: localhost
+      port: 6379
+      password: your-password
+      database: 0
+      timeout: 3000ms
+      lettuce:
+        pool:
+          max-active: 50
+          max-idle: 20
+          min-idle: 5
+          max-wait: 2000ms
+```
+
+#### 集群模式 (生产环境推荐)
+
+```yaml
+spring:
+  data:
+    redis:
+      password: your-password
+      cluster:
+        nodes:
+          - redis-node1:6379
+          - redis-node2:6379
+          - redis-node3:6379
+          - redis-node4:6379
+          - redis-node5:6379
+          - redis-node6:6379
+        max-redirects: 3
+      timeout: 3000ms
+      lettuce:
+        pool:
+          max-active: 50
+          max-idle: 20
+          min-idle: 5
+          max-wait: 2000ms
+        cluster:
+          refresh:
+            adaptive: true    # 自适应刷新拓扑
+            period: 30s       # 定期刷新间隔
+```
+
+#### 哨兵模式
+
+```yaml
+spring:
+  data:
+    redis:
+      password: your-password
+      sentinel:
+        master: mymaster
+        nodes:
+          - sentinel1:26379
+          - sentinel2:26379
+          - sentinel3:26379
+      timeout: 3000ms
+      lettuce:
+        pool:
+          max-active: 50
+          max-idle: 20
+          min-idle: 5
+          max-wait: 2000ms
+```
+
+> **注意**: 本服务的Redis操作均使用单Key Lua脚本，完全兼容Redis集群模式。
+
+### 基础配置
+
+```yaml
+spring:
+  kafka:
+    bootstrap-servers: localhost:9092
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.StringSerializer
+
+# Jasypt加密配置
+jasypt:
+  encryptor:
+    algorithm: PBEWITHHMACSHA512ANDAES_256
+    iv-generator-classname: org.jasypt.iv.RandomIvGenerator
+
 probe:
   # 总开关
   enabled: true
@@ -372,34 +486,46 @@ probe:
   token-enabled: true
   dns-config-enabled: true
   upload-enabled: true
-  h5-upload-enabled: true           # H5上报开关
+  h5-upload-enabled: true
   
-  # 密钥配置 (生产环境请修改!)
-  aes-key: your-aes-key-here
-  hmac-secret: your-hmac-secret-here
+  # Kafka topic
+  kafka-topic: probe_metadata
+  
+  # 多商户配置 (支持ENC()加密)
+  apps:
+    - app-id: app001
+      app-name: "商户A"
+      aes-key: ENC(加密后的AES密钥)
+      hmac-secret: ENC(加密后的HMAC密钥)
+      enabled: true
+    - app-id: app002
+      app-name: "商户B"  
+      aes-key: ENC(加密后的AES密钥)
+      hmac-secret: ENC(加密后的HMAC密钥)
+      enabled: true
   
   # Token配置
-  token-ttl-minutes: 30              # Token有效期
-  token-max-requests-per-window: 100 # 同一Token在窗口期内最大请求数
-  token-request-window-minutes: 5    # Token请求窗口期
+  token-ttl-minutes: 30
+  token-max-requests-per-window: 100
+  token-request-window-minutes: 5
   
   # 时间戳校验
-  timestamp-valid-minutes: 5         # 时间戳有效范围
+  timestamp-valid-minutes: 5
   
   # IP限流
-  ip-rate-limit-count: 100           # 每IP最大请求数
-  ip-rate-limit-window-seconds: 180  # 限流窗口(秒)
+  ip-rate-limit-count: 100
+  ip-rate-limit-window-seconds: 180
   
   # Nonce缓存
-  nonce-cache-size: 100000           # 本地LRU缓存大小
-  nonce-cache-expire-minutes: 10     # Nonce过期时间
+  nonce-cache-size: 100000
+  nonce-cache-expire-minutes: 10
   
-  # 域名分类配置 (支持动态刷新，修改后自动生效)
+  # 域名分类配置
   domain-categories:
-    api:                              # 分类标识Key
-      name: "API服务"                  # 分类名称
-      description: "核心API接口服务器"  # 分类描述
-      domains:                        # 该分类下的域名列表
+    api:
+      name: "API服务"
+      description: "核心API接口服务器"
+      domains:
         - api.example.com
         - api-backup.example.com
     cdn:
@@ -408,51 +534,96 @@ probe:
       domains:
         - cdn1.example.com
         - cdn2.example.com
-        - cdn3.example.com
-    static:
-      name: "静态资源"
-      description: "静态文件服务器"
-      domains:
-        - static.example.com
-        - img.example.com
-    thirdparty:
-      name: "第三方服务"
-      description: "第三方依赖服务"
-      domains:
-        - payment.thirdparty.com
-        - push.thirdparty.com
   
-  # DNS服务器配置 (支持动态刷新)
+  # DNS服务器配置
   probe-dns-servers:
     - 8.8.8.8
     - 114.114.114.114
-    - 223.5.5.5
-
-  # 路径配置
-  paths:
-    ios-token-path: /api/probe/ios/token
-    android-token-path: /api/probe/android/token
-    ios-dns-config-path: /api/probe/ios/dns-config
-    android-dns-config-path: /api/probe/android/dns-config
-    ios-upload-path: /api/probe/ios/upload
-    android-upload-path: /api/probe/android/upload
-    h5-upload-path: /api/probe/h5/upload
 ```
 
-### 动态配置刷新
+### Jasypt配置加密
 
-所有配置项支持动态刷新，无需重启服务：
+使用Jasypt对敏感配置（AES密钥、HMAC密钥）进行加密：
 
-1. **Spring Cloud Config**: 通过配置中心修改后自动推送
-2. **Nacos**: 支持Nacos配置中心实时更新
-3. **手动刷新**: 调用 `/actuator/refresh` 端点触发刷新
+#### 方法1: 使用 Jasypt CLI (推荐)
 
 ```bash
-# 手动触发配置刷新
-curl -X POST http://localhost:8080/actuator/refresh
+# 1. 下载 jasypt: https://github.com/jasypt/jasypt/releases
+
+# 2. 加密
+java -cp jasypt-1.9.3.jar org.jasypt.intf.cli.JasyptPBEStringEncryptionCLI \
+  input="your-aes-key-here" \
+  password="your-master-password" \
+  algorithm=PBEWITHHMACSHA512ANDAES_256
+
+# 输出示例:
+# ----OUTPUT----------------------
+# Abc123XYZ789==
+
+# 3. 解密验证
+java -cp jasypt-1.9.3.jar org.jasypt.intf.cli.JasyptPBEStringDecryptionCLI \
+  input="Abc123XYZ789==" \
+  password="your-master-password" \
+  algorithm=PBEWITHHMACSHA512ANDAES_256
 ```
 
-**注意**: 需要在 `pom.xml` 中添加 actuator 依赖并开启 refresh 端点：
+#### 方法2: 使用 Java 代码
+
+```java
+import org.jasypt.encryption.pbe.StandardPBEStringEncryptor;
+
+public class JasyptEncryptUtil {
+    public static void main(String[] args) {
+        StandardPBEStringEncryptor encryptor = new StandardPBEStringEncryptor();
+        encryptor.setPassword("your-master-password");  // 主密码
+        encryptor.setAlgorithm("PBEWITHHMACSHA512ANDAES_256");
+        
+        // 加密
+        String encrypted = encryptor.encrypt("your-aes-key-here");
+        System.out.println("ENC(" + encrypted + ")");
+        
+        // 解密验证
+        String decrypted = encryptor.decrypt(encrypted);
+        System.out.println("Decrypted: " + decrypted);
+    }
+}
+```
+
+#### 方法3: 使用 Maven 插件
+
+```bash
+mvn jasypt:encrypt-value -Djasypt.encryptor.password="master-password" -Djasypt.plugin.value="your-secret"
+```
+
+#### 在配置中使用加密值
+
+```yaml
+probe:
+  apps:
+    - app-id: app001
+      app-name: "商户A"
+      aes-key: ENC(Abc123XYZ789==)        # 加密后的AES密钥
+      hmac-secret: ENC(Def456UVW012==)    # 加密后的HMAC密钥
+      enabled: true
+```
+
+#### 启动时传入主密码
+
+```bash
+# 方式1: JVM参数 (推荐生产环境)
+java -Djasypt.encryptor.password=your-master-password -jar probe-service.jar
+
+# 方式2: 环境变量
+export JASYPT_ENCRYPTOR_PASSWORD=your-master-password
+java -jar probe-service.jar
+
+# 方式3: 配置文件 (不推荐生产环境)
+# application.yml 中配置: jasypt.encryptor.password=xxx
+```
+
+> **安全提示**: 主密码不要提交到代码仓库，建议通过CI/CD环境变量或密钥管理服务注入。
+
+### 健康检查
 ```yaml
 management:
   endpoints:

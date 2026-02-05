@@ -1,0 +1,407 @@
+package com.sports.gateway.probe.controller;
+
+import cn.hutool.core.util.StrUtil;
+import com.alibaba.fastjson.JSON;
+import com.alibaba.fastjson.TypeReference;
+import com.sports.gateway.config.properties.ProbeProperties;
+import com.sports.gateway.probe.dto.DnsConfigResponse;
+import com.sports.gateway.probe.dto.TokenRequest;
+import com.sports.gateway.probe.dto.TokenResponse;
+import com.sports.gateway.probe.service.*;
+import com.sports.gateway.probe.util.AesUtil;
+import com.sports.gateway.probe.util.HmacUtil;
+import jakarta.servlet.http.HttpServletRequest;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.*;
+
+import java.util.Map;
+
+@Slf4j
+@RestController
+@RequestMapping("/api/probe")
+public class ProbeController {
+
+    private static final String HEADER_X_TS = "X-Ts";
+    private static final String HEADER_X_NONCE = "X-Nonce";
+    private static final String HEADER_X_SIGN = "X-Sign";
+    private static final String HEADER_X_TOKEN = "X-Probe-Token";
+    private static final String HEADER_X_APP_ID = "X-App-Id";
+
+    private static final int MAX_BODY_SIZE = 64 * 1024;
+    private static final int MAX_NONCE_LENGTH = 64;
+    private static final int MAX_TOKEN_LENGTH = 64;
+    private static final int MAX_SIGN_LENGTH = 128;
+    private static final int MAX_TS_LENGTH = 16;
+    private static final int MAX_APP_ID_LENGTH = 64;
+    private static final int MAX_IP_LENGTH = 64;  // IPv6 with zone ID (e.g., fe80::1%eth0)
+    
+    // 缓存TypeReference实例，避免每次创建
+    private static final TypeReference<Map<String, Object>> MAP_TYPE_REF = new TypeReference<Map<String, Object>>() {};
+
+    private final ProbeProperties probeProperties;
+    private final ProbeIpRateLimitService rateLimitService;
+    private final ProbeTokenService tokenService;
+    private final NonceService nonceService;
+    private final AppConfigService appConfigService;
+    private final ProbeKafkaService kafkaService;
+
+    public ProbeController(ProbeProperties probeProperties,
+                          ProbeIpRateLimitService rateLimitService,
+                          ProbeTokenService tokenService,
+                          NonceService nonceService,
+                          AppConfigService appConfigService,
+                          ProbeKafkaService kafkaService) {
+        this.probeProperties = probeProperties;
+        this.rateLimitService = rateLimitService;
+        this.tokenService = tokenService;
+        this.nonceService = nonceService;
+        this.appConfigService = appConfigService;
+        this.kafkaService = kafkaService;
+    }
+
+    @PostMapping("/{platform}/token")
+    public ResponseEntity<String> getToken(
+            @PathVariable String platform,
+            @RequestHeader(HEADER_X_APP_ID) String appId,
+            @RequestBody String encryptedBody,
+            HttpServletRequest request) {
+        
+        if (!probeProperties.isEnabled() || !probeProperties.isTokenEnabled()) {
+            return ResponseEntity.status(HttpStatus.GONE).build();
+        }
+
+        // 防止数据伪造: 先验证输入长度和格式
+        if (!isValidPlatform(platform) || !isValidAppId(appId)) {
+            return ResponseEntity.noContent().build();
+        }
+
+        String aesKey = appConfigService.getAesKey(appId);
+        if (aesKey == null) {
+            log.warn("Invalid appId: {}", appId);
+            return ResponseEntity.noContent().build();
+        }
+
+        String clientIp = getClientIp(request);
+
+        if (!rateLimitService.allowProbeRequestSync(clientIp, "token")) {
+            return ResponseEntity.noContent().build();
+        }
+
+        try {
+            if (encryptedBody == null || encryptedBody.isEmpty() || encryptedBody.length() > MAX_BODY_SIZE) {
+                return ResponseEntity.noContent().build();
+            }
+
+            String decryptedBody = AesUtil.decrypt(encryptedBody, aesKey);
+            if (decryptedBody == null) {
+                return ResponseEntity.noContent().build();
+            }
+
+            TokenRequest tokenRequest = JSON.parseObject(decryptedBody, TokenRequest.class);
+            if (tokenRequest == null || StrUtil.isBlank(tokenRequest.getDeviceId()) 
+                    || tokenRequest.getDeviceId().length() > 128) {
+                return ResponseEntity.noContent().build();
+            }
+
+            String token = tokenService.generateTokenSync(platform, tokenRequest.getDeviceId(), clientIp, appId);
+            if (token == null) {
+                return ResponseEntity.noContent().build();
+            }
+
+            TokenResponse response = new TokenResponse();
+            response.setToken(token);
+            response.setExpiresIn(probeProperties.getTokenTtlMinutes() * 60L);
+
+            String responseJson = JSON.toJSONString(response);
+            String encryptedResponse = AesUtil.encrypt(responseJson, aesKey);
+
+            return ResponseEntity.ok(encryptedResponse);
+        } catch (Exception e) {
+            log.error("Token request processing error: {}", e.getMessage());
+            return ResponseEntity.noContent().build();
+        }
+    }
+
+    @PostMapping("/{platform}/dns-config")
+    public ResponseEntity<String> getDnsConfig(
+            @PathVariable String platform,
+            @RequestHeader(HEADER_X_APP_ID) String appId,
+            @RequestHeader(HEADER_X_TOKEN) String token,
+            HttpServletRequest request) {
+
+        if (!probeProperties.isEnabled() || !probeProperties.isDnsConfigEnabled()) {
+            return ResponseEntity.status(HttpStatus.GONE).build();
+        }
+
+        // 防止数据伪造: 先验证输入长度和格式
+        if (!isValidPlatform(platform) || !isValidAppId(appId)) {
+            return ResponseEntity.noContent().build();
+        }
+
+        String aesKey = appConfigService.getAesKey(appId);
+        if (aesKey == null) {
+            return ResponseEntity.noContent().build();
+        }
+
+        if (StrUtil.isBlank(token) || token.length() > MAX_TOKEN_LENGTH) {
+            return ResponseEntity.noContent().build();
+        }
+
+        String clientIp = getClientIp(request);
+
+        if (!rateLimitService.allowProbeRequestSync(clientIp, "dns-config")) {
+            return ResponseEntity.noContent().build();
+        }
+
+        if (!tokenService.validateTokenSync(token, clientIp, appId)) {
+            return ResponseEntity.noContent().build();
+        }
+
+        DnsConfigResponse response = buildDnsConfigResponse();
+        String responseJson = JSON.toJSONString(response);
+        String encryptedResponse = AesUtil.encrypt(responseJson, aesKey);
+
+        if (encryptedResponse == null) {
+            return ResponseEntity.noContent().build();
+        }
+
+        return ResponseEntity.ok(encryptedResponse);
+    }
+
+    @PostMapping("/{platform}/upload")
+    public ResponseEntity<Void> uploadProbeData(
+            @PathVariable String platform,
+            @RequestHeader(HEADER_X_APP_ID) String appId,
+            @RequestHeader(HEADER_X_TOKEN) String token,
+            @RequestHeader(HEADER_X_TS) String ts,
+            @RequestHeader(HEADER_X_NONCE) String nonce,
+            @RequestHeader(HEADER_X_SIGN) String sign,
+            @RequestBody String encryptedBody,
+            HttpServletRequest request) {
+
+        if (!probeProperties.isEnabled() || !probeProperties.isUploadEnabled()) {
+            return ResponseEntity.status(HttpStatus.GONE).build();
+        }
+
+        // 防止数据伪造: 先验证输入长度和格式
+        if (!isValidPlatform(platform) || !isValidAppId(appId)) {
+            return ResponseEntity.noContent().build();
+        }
+
+        String aesKey = appConfigService.getAesKey(appId);
+        String hmacSecret = appConfigService.getHmacSecret(appId);
+        if (aesKey == null || hmacSecret == null) {
+            return ResponseEntity.noContent().build();
+        }
+
+        if (StrUtil.isBlank(ts) || StrUtil.isBlank(nonce) || 
+            StrUtil.isBlank(sign) || StrUtil.isBlank(token)) {
+            return ResponseEntity.noContent().build();
+        }
+
+        if (!isValidHeaderLength(ts, nonce, sign, token)) {
+            return ResponseEntity.noContent().build();
+        }
+
+        if (!isTimestampValid(ts)) {
+            return ResponseEntity.noContent().build();
+        }
+
+        String clientIp = getClientIp(request);
+
+        if (!rateLimitService.allowProbeRequestSync(clientIp, "upload")) {
+            return ResponseEntity.noContent().build();
+        }
+
+        if (!tokenService.validateTokenSync(token, clientIp, appId)) {
+            return ResponseEntity.noContent().build();
+        }
+
+        try {
+            if (encryptedBody == null || encryptedBody.isEmpty() || encryptedBody.length() > MAX_BODY_SIZE) {
+                return ResponseEntity.noContent().build();
+            }
+
+            byte[] bodyBytes = encryptedBody.getBytes();
+            String bodyHash = HmacUtil.sha256Hash(bodyBytes);
+            if (bodyHash == null) {
+                return ResponseEntity.noContent().build();
+            }
+
+            if (!HmacUtil.validateHmac(ts, nonce, bodyHash, sign, hmacSecret)) {
+                return ResponseEntity.noContent().build();
+            }
+
+            if (!nonceService.tryUseNonceSync(nonce)) {
+                return ResponseEntity.noContent().build();
+            }
+
+            String decryptedBody = AesUtil.decrypt(encryptedBody, aesKey);
+            if (decryptedBody == null) {
+                return ResponseEntity.noContent().build();
+            }
+
+            Map<String, Object> probeData = JSON.parseObject(decryptedBody, MAP_TYPE_REF);
+            if (probeData == null) {
+                return ResponseEntity.noContent().build();
+            }
+
+            kafkaService.sendProbeData(appId, platform, clientIp, probeData);
+
+            return ResponseEntity.ok().build();
+        } catch (Exception e) {
+            log.error("Upload processing error: {}", e.getMessage());
+            return ResponseEntity.noContent().build();
+        }
+    }
+
+    @PostMapping("/h5/upload")
+    public ResponseEntity<Void> uploadH5ProbeData(
+            @RequestHeader(HEADER_X_APP_ID) String appId,
+            @RequestBody String body,
+            HttpServletRequest request) {
+
+        if (!probeProperties.isEnabled() || !probeProperties.isH5UploadEnabled()) {
+            return ResponseEntity.status(HttpStatus.GONE).build();
+        }
+
+        // 防止数据伪造: 先验证输入长度和格式
+        if (!isValidAppId(appId) || !appConfigService.isValidAppId(appId)) {
+            return ResponseEntity.noContent().build();
+        }
+
+        String clientIp = getClientIp(request);
+
+        if (!rateLimitService.allowProbeRequestSync(clientIp, "h5-upload")) {
+            return ResponseEntity.noContent().build();
+        }
+
+        try {
+            if (body == null || body.isEmpty() || body.length() > MAX_BODY_SIZE) {
+                return ResponseEntity.noContent().build();
+            }
+
+            Map<String, Object> probeData = JSON.parseObject(body, MAP_TYPE_REF);
+            if (probeData == null) {
+                return ResponseEntity.noContent().build();
+            }
+
+            kafkaService.sendProbeData(appId, "h5", clientIp, probeData);
+
+            return ResponseEntity.ok().build();
+        } catch (Exception e) {
+            log.error("H5 upload processing error: {}", e.getMessage());
+            return ResponseEntity.noContent().build();
+        }
+    }
+
+    private boolean isValidPlatform(String platform) {
+        // 防止数据伪造: 严格校验平台值
+        return platform != null && 
+               ("ios".equals(platform.toLowerCase()) || "android".equals(platform.toLowerCase())) &&
+               platform.length() <= 10;
+    }
+    
+    // 防止数据伪造: 校验appId格式(仅允许字母数字下划线)
+    private boolean isValidAppId(String appId) {
+        if (appId == null || appId.isEmpty() || appId.length() > MAX_APP_ID_LENGTH) {
+            return false;
+        }
+        for (int i = 0; i < appId.length(); i++) {
+            char c = appId.charAt(i);
+            if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || 
+                  (c >= '0' && c <= '9') || c == '_' || c == '-')) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private boolean isValidHeaderLength(String ts, String nonce, String sign, String token) {
+        return ts.length() <= MAX_TS_LENGTH &&
+               nonce.length() <= MAX_NONCE_LENGTH &&
+               sign.length() <= MAX_SIGN_LENGTH &&
+               token.length() <= MAX_TOKEN_LENGTH;
+    }
+
+    private boolean isTimestampValid(String ts) {
+        try {
+            long timestamp = Long.parseLong(ts);
+            long now = System.currentTimeMillis();
+            long diff = Math.abs(now - timestamp);
+            long maxDiff = probeProperties.getTimestampValidMinutes() * 60 * 1000L;
+            return diff <= maxDiff;
+        } catch (NumberFormatException e) {
+            return false;
+        }
+    }
+
+    private DnsConfigResponse buildDnsConfigResponse() {
+        DnsConfigResponse response = new DnsConfigResponse();
+        response.setDnsServers(new java.util.ArrayList<>(probeProperties.getProbeDnsServers()));
+
+        probeProperties.getDomainCategories().forEach((key, category) -> {
+            if (category != null) {
+                DnsConfigResponse.DomainCategoryDto dto = new DnsConfigResponse.DomainCategoryDto();
+                dto.setCategoryKey(key);
+                dto.setName(category.getName());
+                dto.setDescription(category.getDescription());
+                dto.setDomains(category.getDomains() != null ? 
+                        new java.util.ArrayList<>(category.getDomains()) : new java.util.ArrayList<>());
+                response.getCategories().add(dto);
+            }
+        });
+
+        return response;
+    }
+
+    private String getClientIp(HttpServletRequest request) {
+        String ip = request.getHeader("X-Real-IP");
+        if (isValidIp(ip)) {
+            return ip.trim();
+        }
+        ip = request.getHeader("X-Forwarded-For");
+        if (ip != null && !ip.isEmpty() && ip.length() <= 500) {
+            // 防止ReDoS: 不使用split正则，手动查找第一个逗号
+            int commaIndex = ip.indexOf(',');
+            String firstIp = (commaIndex > 0) ? ip.substring(0, commaIndex).trim() : ip.trim();
+            if (isValidIp(firstIp)) {
+                return firstIp;
+            }
+        }
+        return request.getRemoteAddr();
+    }
+
+    // 防止ReDoS: 使用字符遍历替代正则表达式验证IP (支持IPv4/IPv6/IPv6 zone ID)
+    private boolean isValidIp(String ip) {
+        if (ip == null || ip.isEmpty() || ip.length() > MAX_IP_LENGTH) {
+            return false;
+        }
+        // IPv4: 0-9, .
+        // IPv6: 0-9, a-f, A-F, :
+        // IPv6 zone ID: % 后跟接口名 (字母数字)
+        boolean hasPercent = false;
+        for (int i = 0; i < ip.length(); i++) {
+            char c = ip.charAt(i);
+            if (c == '%') {
+                hasPercent = true;
+                continue;
+            }
+            if (hasPercent) {
+                // zone ID部分: 允许字母数字
+                if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9'))) {
+                    return false;
+                }
+            } else {
+                // IP部分: 数字、十六进制字母、点、冒号
+                if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || 
+                      (c >= 'A' && c <= 'F') || c == '.' || c == ':')) {
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
+}

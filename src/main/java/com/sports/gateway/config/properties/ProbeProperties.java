@@ -2,7 +2,6 @@ package com.sports.gateway.config.properties;
 
 import lombok.Data;
 import org.springframework.boot.context.properties.ConfigurationProperties;
-import org.springframework.cloud.context.config.annotation.RefreshScope;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
@@ -12,7 +11,6 @@ import java.util.Map;
 
 @Data
 @Component
-@RefreshScope
 @ConfigurationProperties(prefix = "probe")
 public class ProbeProperties {
 
@@ -25,10 +23,19 @@ public class ProbeProperties {
     private boolean uploadEnabled = true;
 
     private boolean h5UploadEnabled = true;
-
-    private String aesKey = "your-aes-key-here";
-
-    private String hmacSecret = "your-hmac-secret-here";
+    
+    private String kafkaTopic = "probe_metadata";
+    
+    private List<AppConfig> apps = new ArrayList<>();
+    
+    @Data
+    public static class AppConfig {
+        private String appId;
+        private String appName;
+        private String aesKey;
+        private String hmacSecret;
+        private boolean enabled = true;
+    }
 
     private int tokenTtlMinutes = 30;
 

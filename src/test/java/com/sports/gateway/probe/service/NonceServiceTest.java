@@ -7,16 +7,13 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
-import org.springframework.data.redis.core.ReactiveRedisTemplate;
-import org.springframework.data.redis.core.ReactiveValueOperations;
-import reactor.core.publisher.Mono;
-import reactor.test.StepVerifier;
+import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.core.ValueOperations;
 
-import java.time.Duration;
+import java.util.concurrent.TimeUnit;
 
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyString;
-import static org.mockito.ArgumentMatchers.eq;
+import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -24,10 +21,10 @@ import static org.mockito.Mockito.when;
 class NonceServiceTest {
 
     @Mock
-    private ReactiveRedisTemplate<String, String> redisTemplate;
+    private StringRedisTemplate redisTemplate;
     
     @Mock
-    private ReactiveValueOperations<String, String> valueOps;
+    private ValueOperations<String, String> valueOps;
 
     private ProbeProperties probeProperties;
     private NonceService nonceService;
@@ -46,46 +43,46 @@ class NonceServiceTest {
     @DisplayName("首次使用Nonce - 成功")
     void tryUseNonce_firstTime_success() {
         when(redisTemplate.opsForValue()).thenReturn(valueOps);
-        when(valueOps.setIfAbsent(anyString(), anyString(), any(Duration.class)))
-                .thenReturn(Mono.just(true));
+        when(valueOps.setIfAbsent(anyString(), anyString(), anyLong(), any(TimeUnit.class)))
+                .thenReturn(true);
 
-        StepVerifier.create(nonceService.tryUseNonce("test-nonce-001"))
-                .expectNext(true)
-                .verifyComplete();
+        boolean result = nonceService.tryUseNonceSync("test-nonce-001");
+        
+        assertTrue(result);
     }
 
     @Test
     @DisplayName("重复使用Nonce - Redis返回false")
     void tryUseNonce_duplicate_redisReturnsFalse() {
         when(redisTemplate.opsForValue()).thenReturn(valueOps);
-        when(valueOps.setIfAbsent(anyString(), anyString(), any(Duration.class)))
-                .thenReturn(Mono.just(false));
+        when(valueOps.setIfAbsent(anyString(), anyString(), anyLong(), any(TimeUnit.class)))
+                .thenReturn(false);
 
-        StepVerifier.create(nonceService.tryUseNonce("test-nonce-002"))
-                .expectNext(false)
-                .verifyComplete();
+        boolean result = nonceService.tryUseNonceSync("test-nonce-002");
+        
+        assertFalse(result);
     }
 
     @Test
     @DisplayName("重复使用Nonce - 本地缓存命中")
     void tryUseNonce_duplicate_localCacheHit() {
         when(redisTemplate.opsForValue()).thenReturn(valueOps);
-        when(valueOps.setIfAbsent(anyString(), anyString(), any(Duration.class)))
-                .thenReturn(Mono.just(true));
+        when(valueOps.setIfAbsent(anyString(), anyString(), anyLong(), any(TimeUnit.class)))
+                .thenReturn(true);
 
-        nonceService.tryUseNonce("test-nonce-003").block();
+        nonceService.tryUseNonceSync("test-nonce-003");
 
-        StepVerifier.create(nonceService.tryUseNonce("test-nonce-003"))
-                .expectNext(false)
-                .verifyComplete();
+        boolean result = nonceService.tryUseNonceSync("test-nonce-003");
+        
+        assertFalse(result);
     }
 
     @Test
     @DisplayName("Nonce为null - 返回false")
     void tryUseNonce_null_returnsFalse() {
-        StepVerifier.create(nonceService.tryUseNonce(null))
-                .expectNext(false)
-                .verifyComplete();
+        boolean result = nonceService.tryUseNonceSync(null);
+        
+        assertFalse(result);
     }
 
     @Test
@@ -93,20 +90,18 @@ class NonceServiceTest {
     void tryUseNonce_tooLong_returnsFalse() {
         String longNonce = "a".repeat(100);
         
-        StepVerifier.create(nonceService.tryUseNonce(longNonce))
-                .expectNext(false)
-                .verifyComplete();
+        boolean result = nonceService.tryUseNonceSync(longNonce);
+        
+        assertFalse(result);
     }
 
     @Test
     @DisplayName("Redis异常 - 返回false")
     void tryUseNonce_redisError_returnsFalse() {
-        when(redisTemplate.opsForValue()).thenReturn(valueOps);
-        when(valueOps.setIfAbsent(anyString(), anyString(), any(Duration.class)))
-                .thenReturn(Mono.error(new RuntimeException("Redis connection failed")));
+        when(redisTemplate.opsForValue()).thenThrow(new RuntimeException("Redis connection failed"));
 
-        StepVerifier.create(nonceService.tryUseNonce("test-nonce-004"))
-                .expectNext(false)
-                .verifyComplete();
+        boolean result = nonceService.tryUseNonceSync("test-nonce-004");
+        
+        assertFalse(result);
     }
 }

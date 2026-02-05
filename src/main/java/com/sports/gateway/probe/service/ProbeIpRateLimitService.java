@@ -2,13 +2,12 @@ package com.sports.gateway.probe.service;
 
 import com.sports.gateway.config.properties.ProbeProperties;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.data.redis.core.ReactiveRedisTemplate;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.script.RedisScript;
 import org.springframework.stereotype.Component;
-import reactor.core.publisher.Mono;
 
-import java.util.Arrays;
 import java.util.Collections;
+import java.util.List;
 
 @Slf4j
 @Component
@@ -23,32 +22,33 @@ public class ProbeIpRateLimitService {
             "if current > limit then return 0 end " +
             "return 1";
 
-    private final ReactiveRedisTemplate<String, String> redisTemplate;
+    private final StringRedisTemplate redisTemplate;
     private final RedisScript<Long> script;
     private final ProbeProperties probeProperties;
 
-    public ProbeIpRateLimitService(ReactiveRedisTemplate<String, String> redisTemplate,
+    public ProbeIpRateLimitService(StringRedisTemplate redisTemplate,
                                    ProbeProperties probeProperties) {
         this.redisTemplate = redisTemplate;
         this.probeProperties = probeProperties;
         this.script = RedisScript.of(LUA_SCRIPT, Long.class);
     }
 
-    public Mono<Boolean> allowProbeRequest(String ip, String pathType) {
-        String key = "probe:ip:limit:" + pathType + ":" + ip;
-        
-        return redisTemplate.execute(
-                script,
-                Collections.singletonList(key),
-                Arrays.asList(
-                        String.valueOf(probeProperties.getIpRateLimitCount()),
-                        String.valueOf(probeProperties.getIpRateLimitWindowSeconds())
-                )
-        ).next().map(result -> result != null && result == 1L)
-         .defaultIfEmpty(false)
-         .onErrorResume(e -> {
-             log.error("Rate limit check error for IP: {}, error: {}", ip, e.getMessage());
-             return Mono.just(false);
-         });
+    public boolean allowProbeRequestSync(String ip, String pathType) {
+        try {
+            String key = "probe:ip:limit:" + pathType + ":" + ip;
+            List<String> keys = Collections.singletonList(key);
+            
+            Long result = redisTemplate.execute(
+                    script,
+                    keys,
+                    String.valueOf(probeProperties.getIpRateLimitCount()),
+                    String.valueOf(probeProperties.getIpRateLimitWindowSeconds())
+            );
+            
+            return result != null && result == 1L;
+        } catch (Exception e) {
+            log.error("Rate limit check error for IP: {}, error: {}", ip, e.getMessage());
+            return false;
+        }
     }
 }
