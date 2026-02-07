@@ -15,6 +15,8 @@ import java.util.UUID;
  */
 public class TestHelper {
 
+    // 商户配置 (对应application.yml中的apps配置)
+    private static final String APP_ID = "app001";
     private static final String AES_KEY = "test-aes-key-123";
     private static final String HMAC_SECRET = "test-hmac-secret";
     private static final ObjectMapper objectMapper = new ObjectMapper();
@@ -50,6 +52,7 @@ public class TestHelper {
         System.out.println("\ncurl命令:");
         System.out.printf("curl -X POST 'http://localhost:8080/api/probe/ios/token' \\%n");
         System.out.printf("  -H 'Content-Type: application/json' \\%n");
+        System.out.printf("  -H 'X-App-Id: %s' \\%n", APP_ID);
         System.out.printf("  -d '%s'%n", encrypted);
         System.out.println();
         } catch (Exception e) {
@@ -94,6 +97,7 @@ public class TestHelper {
         String bodyHash = HmacUtil.sha256Hash(bodyBytes);
         String sign = HmacUtil.generateHmac(ts, nonce, bodyHash, HMAC_SECRET);
 
+        System.out.println("X-App-Id: " + APP_ID);
         System.out.println("X-Probe-Token: " + token);
         System.out.println("X-Ts: " + ts);
         System.out.println("X-Nonce: " + nonce);
@@ -103,11 +107,65 @@ public class TestHelper {
         System.out.println("\ncurl命令:");
         System.out.printf("curl -X POST 'http://localhost:8080/api/probe/ios/upload' \\%n");
         System.out.printf("  -H 'Content-Type: application/json' \\%n");
+        System.out.printf("  -H 'X-App-Id: %s' \\%n", APP_ID);
         System.out.printf("  -H 'X-Probe-Token: %s' \\%n", token);
         System.out.printf("  -H 'X-Ts: %s' \\%n", ts);
         System.out.printf("  -H 'X-Nonce: %s' \\%n", nonce);
         System.out.printf("  -H 'X-Sign: %s' \\%n", sign);
         System.out.printf("  -d '%s'%n", encryptedBody);
+        System.out.println();
+    }
+
+    /**
+     * 生成DNS配置请求
+     */
+    public static void generateDnsConfigRequest(String token) {
+        System.out.println("=== DNS配置请求 ===");
+        
+        System.out.println("X-App-Id: " + APP_ID);
+        System.out.println("X-Probe-Token: " + token);
+        
+        System.out.println("\ncurl命令:");
+        System.out.printf("curl -X POST 'http://localhost:8080/api/probe/ios/dns-config' \\%n");
+        System.out.printf("  -H 'Content-Type: application/json' \\%n");
+        System.out.printf("  -H 'X-App-Id: %s' \\%n", APP_ID);
+        System.out.printf("  -H 'X-Probe-Token: %s'%n", token);
+        System.out.println();
+    }
+
+    /**
+     * 生成H5上报请求 (无需Token和签名)
+     */
+    public static void generateH5UploadRequest() {
+        System.out.println("=== H5上报请求 ===");
+        
+        String h5ProbeData = """
+            {
+                "deviceId": "h5-browser-001",
+                "platform": "h5",
+                "appVersion": "1.0.0",
+                "userAgent": "Mozilla/5.0",
+                "timestamp": %d,
+                "probeResults": [
+                    {
+                        "domain": "api.example.com",
+                        "dnsLatency": 30,
+                        "tcpLatency": 80,
+                        "httpLatency": 150,
+                        "httpStatusCode": 200
+                    }
+                ]
+            }
+            """.formatted(System.currentTimeMillis());
+
+        System.out.println("X-App-Id: " + APP_ID);
+        System.out.println("Body: " + h5ProbeData.substring(0, 50) + "...");
+        
+        System.out.println("\ncurl命令:");
+        System.out.printf("curl -X POST 'http://localhost:8080/api/probe/h5/upload' \\%n");
+        System.out.printf("  -H 'Content-Type: application/json' \\%n");
+        System.out.printf("  -H 'X-App-Id: %s' \\%n", APP_ID);
+        System.out.printf("  -d '%s'%n", h5ProbeData.replace("\n", "").replace(" ", ""));
         System.out.println();
     }
 
