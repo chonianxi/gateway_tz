@@ -18,6 +18,8 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
 
 @Slf4j
 @RestController
@@ -195,7 +197,7 @@ public class ProbeController {
             return ResponseEntity.status(HttpStatus.GONE).build();
         }
 
-        // 防止数据伪造: 先验证输入长度和格式
+        // === 阶段1: CPU校验 (无IO, 快速失败) ===
         if (!isValidPlatform(platform) || !isValidAppId(appId)) {
             return ResponseEntity.noContent().build();
         }
@@ -219,35 +221,48 @@ public class ProbeController {
             return ResponseEntity.noContent().build();
         }
 
+        if (encryptedBody == null || encryptedBody.isEmpty() || encryptedBody.length() > MAX_BODY_SIZE) {
+            return ResponseEntity.noContent().build();
+        }
+
+        // === 阶段2: HMAC验证 (CPU密集, 在Redis调用前完成) ===
+        byte[] bodyBytes = encryptedBody.getBytes();
+        String bodyHash = HmacUtil.sha256Hash(bodyBytes);
+        if (bodyHash == null) {
+            return ResponseEntity.noContent().build();
+        }
+
+        if (!HmacUtil.validateHmac(ts, nonce, bodyHash, sign, hmacSecret)) {
+            return ResponseEntity.noContent().build();
+        }
+
+        // === 阶段3: 并行Redis校验 (优化: 从4次串行变为2次并行) ===
         String clientIp = getClientIp(request);
 
-        if (!rateLimitService.allowProbeRequestSync(clientIp, "upload")) {
-            return ResponseEntity.noContent().build();
-        }
-
-        if (!tokenService.validateTokenSync(token, clientIp, appId)) {
-            return ResponseEntity.noContent().build();
-        }
+        CompletableFuture<Boolean> rateLimitFuture = CompletableFuture.supplyAsync(() -> 
+                rateLimitService.allowProbeRequestSync(clientIp, "upload"));
+        CompletableFuture<Boolean> tokenFuture = CompletableFuture.supplyAsync(() -> 
+                tokenService.validateTokenSync(token, clientIp, appId));
 
         try {
-            if (encryptedBody == null || encryptedBody.isEmpty() || encryptedBody.length() > MAX_BODY_SIZE) {
+            // 等待两个Redis调用并行完成，超时500ms
+            CompletableFuture.allOf(rateLimitFuture, tokenFuture).get(500, TimeUnit.MILLISECONDS);
+            
+            if (!rateLimitFuture.get() || !tokenFuture.get()) {
                 return ResponseEntity.noContent().build();
             }
+        } catch (Exception e) {
+            log.error("Parallel validation error: {}", e.getMessage());
+            return ResponseEntity.noContent().build();
+        }
 
-            byte[] bodyBytes = encryptedBody.getBytes();
-            String bodyHash = HmacUtil.sha256Hash(bodyBytes);
-            if (bodyHash == null) {
-                return ResponseEntity.noContent().build();
-            }
+        // === 阶段4: Nonce消费 (必须在HMAC和Token验证通过后) ===
+        if (!nonceService.tryUseNonceSync(nonce)) {
+            return ResponseEntity.noContent().build();
+        }
 
-            if (!HmacUtil.validateHmac(ts, nonce, bodyHash, sign, hmacSecret)) {
-                return ResponseEntity.noContent().build();
-            }
-
-            if (!nonceService.tryUseNonceSync(nonce)) {
-                return ResponseEntity.noContent().build();
-            }
-
+        // === 阶段5: 解密和处理 ===
+        try {
             String decryptedBody = AesUtil.decrypt(encryptedBody, aesKey);
             if (decryptedBody == null) {
                 return ResponseEntity.noContent().build();

@@ -378,7 +378,7 @@ H5数据同样发送到 `probe_metadata` topic：
 | 项目 | 算法 | 说明 |
 |------|------|------|
 | 对称加密 | AES-256-CBC | PKCS5Padding，IV随机生成前置于密文 |
-| 密钥派生 | PBKDF2-HMAC-SHA256 | 65536次迭代 |
+| 密钥派生 | PBKDF2-HMAC-SHA256 | 4096次迭代 |
 | 签名 | HMAC-SHA256 | 用于上报接口防篡改 |
 | 哈希 | SHA-256 | 计算Body哈希 |
 
@@ -643,7 +643,7 @@ management:
 | 算法 | AES/CBC/PKCS5Padding | 对称加密 |
 | 密钥派生 | PBKDF2WithHmacSHA256 | 从密码派生密钥 |
 | SALT | `ProbeAesSalt2024` | 固定盐值 |
-| 迭代次数 | 65536 | PBKDF2迭代 |
+| 迭代次数 | 4096 | PBKDF2迭代 |
 | 密钥长度 | 256位 (32字节) | AES-256 |
 | IV长度 | 16字节 | 随机生成，前置于密文 |
 
@@ -657,7 +657,7 @@ import CommonCrypto
 
 class AESUtil {
     private static let salt = "ProbeAesSalt2024".data(using: .utf8)!
-    private static let iterationCount: UInt32 = 65536
+    private static let iterationCount: UInt32 = 4096
     private static let keyLength = 32  // 256 bits
     private static let ivLength = 16
     
@@ -812,6 +812,7 @@ extension Data {
 
 ```swift
 class ProbeClient {
+    private let appId = "app001"  // 商户APPID
     private let aesKey = "your-aes-key-here"  // 与Gateway配置一致
     private let hmacSecret = "your-hmac-secret-here"
     private var token: String?
@@ -827,6 +828,7 @@ class ProbeClient {
         var urlRequest = URLRequest(url: URL(string: "https://api.example.com/api/probe/ios/token")!)
         urlRequest.httpMethod = "POST"
         urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        urlRequest.setValue(appId, forHTTPHeaderField: "X-App-Id")
         urlRequest.httpBody = encryptedBody.data(using: .utf8)
         
         let (data, _) = try await URLSession.shared.data(for: urlRequest)
@@ -856,6 +858,8 @@ class ProbeClient {
         
         var urlRequest = URLRequest(url: URL(string: "https://api.example.com/api/probe/ios/upload")!)
         urlRequest.httpMethod = "POST"
+        urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        urlRequest.setValue(appId, forHTTPHeaderField: "X-App-Id")
         urlRequest.setValue(token, forHTTPHeaderField: "X-Probe-Token")
         urlRequest.setValue(ts, forHTTPHeaderField: "X-Ts")
         urlRequest.setValue(nonce, forHTTPHeaderField: "X-Nonce")
@@ -885,7 +889,7 @@ object AesUtil {
     private const val TRANSFORMATION = "AES/CBC/PKCS5Padding"
     private const val IV_LENGTH = 16
     private const val KEY_LENGTH = 256
-    private const val ITERATION_COUNT = 65536
+    private const val ITERATION_COUNT = 4096
     private val SALT = "ProbeAesSalt2024".toByteArray(Charsets.UTF_8)
 
     /**
@@ -973,6 +977,7 @@ fun ByteArray.sha256Hex(): String {
 
 ```kotlin
 class ProbeClient(private val context: Context) {
+    private val appId = "app001"  // 商户APPID
     private val aesKey = "your-aes-key-here"  // 与Gateway配置一致
     private val hmacSecret = "your-hmac-secret-here"
     private var token: String? = null
@@ -994,6 +999,7 @@ class ProbeClient(private val context: Context) {
         
         val httpRequest = Request.Builder()
             .url("https://api.example.com/api/probe/android/token")
+            .header("X-App-Id", appId)
             .post(encryptedBody.toRequestBody("application/json".toMediaType()))
             .build()
         
@@ -1021,6 +1027,7 @@ class ProbeClient(private val context: Context) {
         
         val httpRequest = Request.Builder()
             .url("https://api.example.com/api/probe/android/upload")
+            .header("X-App-Id", appId)
             .header("X-Probe-Token", currentToken)
             .header("X-Ts", ts)
             .header("X-Nonce", nonce)
@@ -1060,7 +1067,8 @@ class ProbeClient {
             const response = await fetch(`${this.baseUrl}/api/probe/h5/upload`, {
                 method: 'POST',
                 headers: {
-                    'Content-Type': 'application/json'
+                    'Content-Type': 'application/json',
+                    'X-App-Id': 'app001'  // 商户APPID
                 },
                 body: JSON.stringify(data)
             });
@@ -1233,7 +1241,7 @@ public class AesUtil {
     private static final String TRANSFORMATION = "AES/CBC/PKCS5Padding";
     private static final int IV_LENGTH = 16;
     private static final int KEY_LENGTH = 256;
-    private static final int ITERATION_COUNT = 65536;
+    private static final int ITERATION_COUNT = 4096;
     private static final byte[] SALT = "ProbeAesSalt2024".getBytes(StandardCharsets.UTF_8);
 
     /**

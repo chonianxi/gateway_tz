@@ -22,7 +22,7 @@ public class AesUtil {
     private static final String TRANSFORMATION = "AES/CBC/PKCS5Padding";
     private static final int IV_LENGTH = 16;
     private static final int KEY_LENGTH = 256;
-    private static final int ITERATION_COUNT = 65536;
+    private static final int ITERATION_COUNT = 4096;
     private static final byte[] SALT = "ProbeAesSalt2024".getBytes(StandardCharsets.UTF_8);
     
     private static final int MAX_CIPHER_TEXT_LENGTH = 1024 * 1024;

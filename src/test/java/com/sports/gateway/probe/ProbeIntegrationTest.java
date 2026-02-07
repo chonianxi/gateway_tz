@@ -31,7 +31,7 @@ import static org.junit.jupiter.api.Assertions.*;
  *   - IV长度: 16字节 (随机生成)
  *   - 密文格式: Base64(IV + EncryptedData)
  *   - 密钥派生: PBKDF2WithHmacSHA256
- *   - 迭代次数: 65536
+ *   - 迭代次数: 4096
  *   - SALT: "ProbeAesSalt2024" (UTF-8编码)
  * 
  * HMAC签名配置:
@@ -52,7 +52,7 @@ class ProbeIntegrationTest {
     // AES加密参数 (客户端实现需要)
     private static final int IV_LENGTH = 16;
     private static final String PBKDF2_SALT = "ProbeAesSalt2024";
-    private static final int PBKDF2_ITERATIONS = 65536;
+    private static final int PBKDF2_ITERATIONS = 4096;
     private static final int AES_KEY_LENGTH = 256;
     
     private static String savedToken;
