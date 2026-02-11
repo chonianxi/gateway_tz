@@ -96,11 +96,38 @@ probe:
       aes-key: ENC(加密后的AES密钥)        # AES加密密钥 (支持ENC()加密)
       hmac-secret: ENC(加密后的HMAC密钥)   # HMAC签名密钥 (支持ENC()加密)
       enabled: true
+      # 商户独立的域名分类配置 (可选，为空则使用全局配置)
+      domain-categories:
+        api:
+          name: "商户A-API"
+          description: "商户A的API服务"
+          domains:
+            - api.merchant-a.com
+            - api-backup.merchant-a.com
+        cdn:
+          name: "商户A-CDN"
+          description: "商户A的CDN节点"
+          domains:
+            - cdn.merchant-a.com
+      # 商户独立的DNS服务器配置 (可选，为空则使用全局配置)
+      probe-dns-servers:
+        - 8.8.8.8
+        - 1.1.1.1
     - app-id: app002
       app-name: "商户B"
       aes-key: ENC(加密后的AES密钥)
       hmac-secret: ENC(加密后的HMAC密钥)
       enabled: true
+      # 商户B使用独立配置
+      domain-categories:
+        api:
+          name: "商户B-API"
+          description: "商户B的API服务"
+          domains:
+            - api.merchant-b.com
+      probe-dns-servers:
+        - 114.114.114.114
+        - 223.5.5.5
   
   # Token配置
   token-ttl-minutes: 30

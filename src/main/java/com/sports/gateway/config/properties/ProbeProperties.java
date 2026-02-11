@@ -35,6 +35,10 @@ public class ProbeProperties {
         private String aesKey;
         private String hmacSecret;
         private boolean enabled = true;
+        // 每个商户独立的域名分类配置 (可选，为空则使用全局配置)
+        private Map<String, DomainCategory> domainCategories = new HashMap<>();
+        // 每个商户独立的DNS服务器配置 (可选，为空则使用全局配置)
+        private List<String> probeDnsServers = new ArrayList<>();
     }
 
     private int tokenTtlMinutes = 30;

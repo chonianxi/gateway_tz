@@ -17,6 +17,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
@@ -165,7 +166,7 @@ public class ProbeController {
             return ResponseEntity.noContent().build();
         }
 
-        DnsConfigResponse response = buildDnsConfigResponse();
+        DnsConfigResponse response = buildDnsConfigResponse(appId);
         String responseJson;
         try {
             responseJson = objectMapper.writeValueAsString(response);
@@ -394,11 +395,27 @@ public class ProbeController {
         }
     }
 
-    private DnsConfigResponse buildDnsConfigResponse() {
+    private DnsConfigResponse buildDnsConfigResponse(String appId) {
         DnsConfigResponse response = new DnsConfigResponse();
-        response.setDnsServers(new java.util.ArrayList<>(probeProperties.getProbeDnsServers()));
+        
+        // 获取商户独立配置，如果为空则使用全局配置
+        ProbeProperties.AppConfig appConfig = findAppConfig(appId);
+        
+        // DNS服务器: 优先使用商户配置，为空则使用全局配置
+        List<String> dnsServers = (appConfig != null && appConfig.getProbeDnsServers() != null 
+                && !appConfig.getProbeDnsServers().isEmpty()) 
+                ? appConfig.getProbeDnsServers() 
+                : probeProperties.getProbeDnsServers();
+        response.setDnsServers(new java.util.ArrayList<>(dnsServers));
+        
+        // 域名分类: 优先使用商户配置，为空则使用全局配置
+        Map<String, ProbeProperties.DomainCategory> categories = 
+                (appConfig != null && appConfig.getDomainCategories() != null 
+                && !appConfig.getDomainCategories().isEmpty()) 
+                ? appConfig.getDomainCategories() 
+                : probeProperties.getDomainCategories();
 
-        probeProperties.getDomainCategories().forEach((key, category) -> {
+        categories.forEach((key, category) -> {
             if (category != null) {
                 DnsConfigResponse.DomainCategoryDto dto = new DnsConfigResponse.DomainCategoryDto();
                 dto.setCategoryKey(key);
@@ -411,6 +428,18 @@ public class ProbeController {
         });
 
         return response;
+    }
+    
+    private ProbeProperties.AppConfig findAppConfig(String appId) {
+        if (appId == null || probeProperties.getApps() == null) {
+            return null;
+        }
+        for (ProbeProperties.AppConfig app : probeProperties.getApps()) {
+            if (app != null && appId.equals(app.getAppId())) {
+                return app;
+            }
+        }
+        return null;
     }
 
     private String getClientIp(HttpServletRequest request) {
