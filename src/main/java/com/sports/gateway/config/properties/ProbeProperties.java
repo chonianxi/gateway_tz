@@ -39,6 +39,8 @@ public class ProbeProperties {
         private Map<String, DomainCategory> domainCategories = new HashMap<>();
         // 每个商户独立的DNS服务器配置 (可选，为空则使用全局配置)
         private List<String> probeDnsServers = new ArrayList<>();
+        // 需要监控的用户列表 (用,隔开)
+        private String monitorUsers;
     }
 
     private int tokenTtlMinutes = 30;

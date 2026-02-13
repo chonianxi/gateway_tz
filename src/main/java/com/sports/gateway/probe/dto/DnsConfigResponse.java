@@ -9,6 +9,7 @@ import java.util.List;
 public class DnsConfigResponse {
     private List<DomainCategoryDto> categories = new ArrayList<>();
     private List<String> dnsServers = new ArrayList<>();
+    private String monitorUsers;  // 需要监控的用户列表 (用,隔开)
 
     @Data
     public static class DomainCategoryDto {

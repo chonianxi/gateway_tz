@@ -113,6 +113,8 @@ probe:
       probe-dns-servers:
         - 8.8.8.8
         - 1.1.1.1
+      # 需要监控的用户列表 (用,隔开)
+      monitor-users: "user001,user002,user003"
     - app-id: app002
       app-name: "商户B"
       aes-key: ENC(加密后的AES密钥)

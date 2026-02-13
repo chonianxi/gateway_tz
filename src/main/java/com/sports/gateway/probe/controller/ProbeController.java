@@ -426,6 +426,11 @@ public class ProbeController {
                 response.getCategories().add(dto);
             }
         });
+        
+        // 监控用户列表
+        if (appConfig != null && appConfig.getMonitorUsers() != null) {
+            response.setMonitorUsers(appConfig.getMonitorUsers());
+        }
 
         return response;
     }
