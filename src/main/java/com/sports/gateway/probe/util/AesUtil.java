@@ -28,9 +28,10 @@ public class AesUtil {
     private static final int MAX_CIPHER_TEXT_LENGTH = 1024 * 1024;
     
     // 使用Caffeine LRU缓存替代ConcurrentHashMap，避免内存泄漏
+    // 缩短过期时间到10分钟，减少配置更新后旧密钥有效窗口
     private static final Cache<String, SecretKeySpec> keyCache = Caffeine.newBuilder()
             .maximumSize(100)
-            .expireAfterAccess(1, TimeUnit.HOURS)
+            .expireAfterAccess(10, TimeUnit.MINUTES)
             .build();
     
     // ThreadLocal复用Cipher实例，避免频繁创建
@@ -110,6 +111,24 @@ public class AesUtil {
         }
     }
 
+    /**
+     * 清除密钥缓存 - 配置刷新时调用
+     * 确保新配置的密钥立即生效，旧密钥立即失效
+     */
+    public static void clearKeyCache() {
+        keyCache.invalidateAll();
+        log.info("AES key cache cleared");
+    }
+    
+    /**
+     * 移除指定密钥的缓存
+     */
+    public static void invalidateKey(String key) {
+        if (key != null) {
+            keyCache.invalidate(key);
+        }
+    }
+    
     private static SecretKeySpec getSecretKey(String key) {
         SecretKeySpec cached = keyCache.getIfPresent(key);
         if (cached != null) {

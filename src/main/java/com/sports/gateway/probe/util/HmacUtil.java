@@ -18,9 +18,10 @@ public class HmacUtil {
     private static final char[] HEX_CHARS = "0123456789abcdef".toCharArray();
     
     // 缓存SecretKeySpec，避免每次创建 (CPU优化)
+    // 缩短过期时间到10分钟，减少配置更新后旧密钥有效窗口
     private static final Cache<String, SecretKeySpec> SECRET_KEY_CACHE = Caffeine.newBuilder()
             .maximumSize(100)
-            .expireAfterAccess(1, TimeUnit.HOURS)
+            .expireAfterAccess(10, TimeUnit.MINUTES)
             .build();
     
     // ThreadLocal复用Mac实例
@@ -81,6 +82,14 @@ public class HmacUtil {
         }
     }
 
+    /**
+     * 清除HMAC密钥缓存 - 配置刷新时调用
+     */
+    public static void clearKeyCache() {
+        SECRET_KEY_CACHE.invalidateAll();
+        log.info("HMAC key cache cleared");
+    }
+    
     // 缓存SecretKeySpec，避免重复创建 (CPU优化)
     private static SecretKeySpec getSecretKeySpec(String secret) {
         return SECRET_KEY_CACHE.get(secret, k -> 
