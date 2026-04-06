@@ -42,12 +42,12 @@ public class HmacUtil {
         }
     });
 
-    public static String generateHmac(String ts, String nonce, String bodyHash, String secret) {
+    public static String generateHmac(String ts, String nonce, String bodyHash, String appId, String secret) {
         try {
             String input = ts + nonce + bodyHash;
             
             Mac mac = MAC_INSTANCE.get();
-            SecretKeySpec secretKeySpec = getSecretKeySpec(secret);
+            SecretKeySpec secretKeySpec = getSecretKeySpec(appId, secret);
             mac.init(secretKeySpec);
             
             byte[] hmacBytes = mac.doFinal(input.getBytes(StandardCharsets.UTF_8));
@@ -59,8 +59,8 @@ public class HmacUtil {
     }
 
     public static boolean validateHmac(String ts, String nonce, String bodyHash, 
-                                       String providedHmac, String secret) {
-        String calculatedHmac = generateHmac(ts, nonce, bodyHash, secret);
+                                       String providedHmac, String appId, String secret) {
+        String calculatedHmac = generateHmac(ts, nonce, bodyHash, appId, secret);
         if (calculatedHmac == null) {
             return false;
         }
@@ -90,10 +90,21 @@ public class HmacUtil {
         log.info("HMAC key cache cleared");
     }
     
+    /**
+     * 移除指定appId的密钥缓存
+     */
+    public static void invalidateKey(String appId) {
+        if (appId != null) {
+            SECRET_KEY_CACHE.asMap().keySet().removeIf(k -> k.startsWith(appId + ":"));
+        }
+    }
+    
     // 缓存SecretKeySpec，避免重复创建 (CPU优化)
-    private static SecretKeySpec getSecretKeySpec(String secret) {
-        return SECRET_KEY_CACHE.get(secret, k -> 
-                new SecretKeySpec(k.getBytes(StandardCharsets.UTF_8), HMAC_SHA256));
+    // 使用 appId:secret 作为缓存键，避免不同appId相同密钥冲突
+    private static SecretKeySpec getSecretKeySpec(String appId, String secret) {
+        String cacheKey = appId + ":" + secret;
+        return SECRET_KEY_CACHE.get(cacheKey, k -> 
+                new SecretKeySpec(secret.getBytes(StandardCharsets.UTF_8), HMAC_SHA256));
     }
     
     // 优化: 使用char数组替代String.format，性能提升约10倍

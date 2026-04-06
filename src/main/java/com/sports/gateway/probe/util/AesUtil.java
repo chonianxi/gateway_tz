@@ -58,9 +58,9 @@ public class AesUtil {
     private static final Base64.Encoder BASE64_ENCODER = Base64.getEncoder();
     private static final Base64.Decoder BASE64_DECODER = Base64.getDecoder();
 
-    public static String encrypt(String plainText, String key) {
+    public static String encrypt(String plainText, String appId, String key) {
         try {
-            SecretKeySpec secretKey = getSecretKey(key);
+            SecretKeySpec secretKey = getSecretKey(appId, key);
 
             byte[] iv = new byte[IV_LENGTH];
             SECURE_RANDOM.get().nextBytes(iv);
@@ -82,7 +82,7 @@ public class AesUtil {
         }
     }
 
-    public static String decrypt(String cipherText, String key) {
+    public static String decrypt(String cipherText, String appId, String key) {
         try {
             if (cipherText == null || cipherText.length() > MAX_CIPHER_TEXT_LENGTH) {
                 return null;
@@ -97,7 +97,7 @@ public class AesUtil {
             System.arraycopy(combined, 0, iv, 0, IV_LENGTH);
             System.arraycopy(combined, IV_LENGTH, encrypted, 0, encrypted.length);
 
-            SecretKeySpec secretKey = getSecretKey(key);
+            SecretKeySpec secretKey = getSecretKey(appId, key);
             IvParameterSpec ivSpec = new IvParameterSpec(iv);
 
             Cipher cipher = DECRYPT_CIPHER.get();
@@ -121,16 +121,19 @@ public class AesUtil {
     }
     
     /**
-     * 移除指定密钥的缓存
+     * 移除指定appId的密钥缓存
      */
-    public static void invalidateKey(String key) {
-        if (key != null) {
-            keyCache.invalidate(key);
+    public static void invalidateKey(String appId) {
+        if (appId != null) {
+            // 遍历缓存移除该appId的所有缓存
+            keyCache.asMap().keySet().removeIf(k -> k.startsWith(appId + ":"));
         }
     }
     
-    private static SecretKeySpec getSecretKey(String key) {
-        SecretKeySpec cached = keyCache.getIfPresent(key);
+    private static SecretKeySpec getSecretKey(String appId, String key) {
+        // 使用 appId:key 作为缓存键，避免不同appId相同密钥冲突
+        String cacheKey = appId + ":" + key;
+        SecretKeySpec cached = keyCache.getIfPresent(cacheKey);
         if (cached != null) {
             return cached;
         }
@@ -140,7 +143,7 @@ public class AesUtil {
             KeySpec spec = new PBEKeySpec(key.toCharArray(), SALT, ITERATION_COUNT, KEY_LENGTH);
             byte[] keyBytes = factory.generateSecret(spec).getEncoded();
             SecretKeySpec secretKey = new SecretKeySpec(keyBytes, ALGORITHM);
-            keyCache.put(key, secretKey);
+            keyCache.put(cacheKey, secretKey);
             return secretKey;
         } catch (Exception e) {
             log.error("Key derivation error: {}", e.getMessage());

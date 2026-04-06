@@ -101,7 +101,7 @@ public class ProbeController {
                 return ResponseEntity.noContent().build();
             }
 
-            String decryptedBody = AesUtil.decrypt(encryptedBody, aesKey);
+            String decryptedBody = AesUtil.decrypt(encryptedBody, appId, aesKey);
             if (decryptedBody == null) {
                 return ResponseEntity.noContent().build();
             }
@@ -122,7 +122,7 @@ public class ProbeController {
             response.setExpiresIn(probeProperties.getTokenTtlMinutes() * 60L);
 
             String responseJson = objectMapper.writeValueAsString(response);
-            String encryptedResponse = AesUtil.encrypt(responseJson, aesKey);
+            String encryptedResponse = AesUtil.encrypt(responseJson, appId, aesKey);
 
             return ResponseEntity.ok(encryptedResponse);
         } catch (Exception e) {
@@ -174,7 +174,7 @@ public class ProbeController {
             log.error("JSON serialization error: {}", e.getMessage());
             return ResponseEntity.noContent().build();
         }
-        String encryptedResponse = AesUtil.encrypt(responseJson, aesKey);
+        String encryptedResponse = AesUtil.encrypt(responseJson, appId, aesKey);
 
         if (encryptedResponse == null) {
             return ResponseEntity.noContent().build();
@@ -233,7 +233,7 @@ public class ProbeController {
             return ResponseEntity.noContent().build();
         }
 
-        if (!HmacUtil.validateHmac(ts, nonce, bodyHash, sign, hmacSecret)) {
+        if (!HmacUtil.validateHmac(ts, nonce, bodyHash, sign, appId, hmacSecret)) {
             return ResponseEntity.noContent().build();
         }
 
@@ -264,7 +264,7 @@ public class ProbeController {
 
         // === 阶段5: 解密和处理 ===
         try {
-            String decryptedBody = AesUtil.decrypt(encryptedBody, aesKey);
+            String decryptedBody = AesUtil.decrypt(encryptedBody, appId, aesKey);
             if (decryptedBody == null) {
                 return ResponseEntity.noContent().build();
             }
